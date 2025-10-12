@@ -1,0 +1,404 @@
+
+
+
+---
+
+
+- フォルダ名: .
+- ファイル名: .env_sample
+- 内容:
+TIMETREE_EMAIL=(TIMETREEのメールアドレス)
+TIMETREE_PASSWORD=（TIMETREEのパスワード）
+TIMETREE_CALENDAR_URL=（TIMETREEで表示させたいカレンダーのURL）
+GAS_WEBAPP_URL=（GASのURL）
+
+
+
+---
+
+
+- フォルダ名: .
+- ファイル名: gas.gs
+- 内容:
+/**
+ * 12時間表記(AM/PM)の時刻文字列をパースして、Dateオブジェクトを生成するヘルパー関数
+ * @param {string} dateStr - "YYYY-MM-DD"形式の日付文字列
+ * @param {string} timeStr - "H:MM AM/PM"形式の時刻文字列
+ * @returns {Date}
+ */
+function parseDateTime(dateStr, timeStr) {
+  const dateParts = dateStr.split('-');
+  const year = parseInt(dateParts[0], 10);
+  const month = parseInt(dateParts[1], 10) - 1; // 月は0-indexed
+  const day = parseInt(dateParts[2], 10);
+
+  const timeMatch = timeStr.match(/(\d+):(\d+)\s(AM|PM)/);
+  let hour = parseInt(timeMatch[1], 10);
+  const minute = parseInt(timeMatch[2], 10);
+  const ampm = timeMatch[3];
+
+  if (ampm === 'PM' && hour < 12) {
+    hour += 12;
+  }
+  if (ampm === 'AM' && hour === 12) { // 深夜12時(12:00 AM)のケース
+    hour = 0;
+  }
+
+  return new Date(year, month, day, hour, minute);
+}
+
+/**
+ * WebアプリとしてPOSTリクエストを受け取ったときに実行されるメイン関数
+ * @param {Object} e - POSTリクエストのイベントオブジェクト
+ */
+function doPost(e) {
+  const logs = []; // Pythonに返すためのログ収集用配列
+  let statusMessage = "";
+
+  try {
+    const events = JSON.parse(e.postData.contents);
+    const calendar = CalendarApp.getDefaultCalendar();
+    
+    logs.push(`Received ${events.length} events to process.`);
+
+    events.forEach(eventData => {
+      const title = eventData.title;
+      const dateStr = eventData.date;
+      const timeStr = eventData.time;
+
+      logs.push(`Processing: '${title}' on ${dateStr} at ${timeStr || 'All-day'}`);
+
+      if (timeStr) {
+        // 時間指定イベント
+        const startTime = parseDateTime(dateStr, timeStr);
+        const endTime = new Date(startTime.getTime() + (60 * 60 * 1000)); // 仮に1時間後
+        
+        logs.push(` -> Creating timed event. Start: ${startTime}, End: ${endTime}`);
+        calendar.createEvent(title, startTime, endTime);
+        
+      } else {
+        // 終日イベント
+        const eventDate = new Date(dateStr);
+        // タイムゾーン問題を避けるため、UTCで日付を扱う
+        const utcDate = new Date(eventDate.getUTCFullYear(), eventDate.getUTCMonth(), eventDate.getUTCDate());
+
+        logs.push(` -> Creating all-day event on: ${utcDate}`);
+        calendar.createAllDayEvent(title, utcDate);
+      }
+    });
+    
+    statusMessage = "Successfully processed " + events.length + " events.";
+    logs.push(statusMessage);
+    
+  } catch (error) {
+    statusMessage = "Error processing request: " + error.toString();
+    logs.push(statusMessage);
+    logs.push("Received data: " + e.postData.contents);
+  }
+  
+  // 処理結果のステータスと、収集したログをまとめてJSONで返す
+  return ContentService
+    .createTextOutput(JSON.stringify({ 
+        status: statusMessage,
+        logs: logs 
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+
+---
+
+
+- フォルダ名: .
+- ファイル名: README.md
+- 内容:
+# TimeTree to Google Calendar Scraper
+
+## 概要
+
+このプロジェクトは、[TimeTree](https://timetreeapp.com/) のカレンダーから予定を自動的にスクレイピングし、指定した Google Calendar に同期するためのツールです。
+Playwright を使用して TimeTree から情報を取得し、Google Apps Script (GAS) を介して Google Calendar にイベントを登録します。
+一連の処理は GitHub Actions によって定期的に自動実行されます。
+
+## 主な機能
+
+- **TimeTree スクレイピング**: Playwright を利用して、TimeTree のウェブサイトにログインし、カレンダーのイベント情報を取得します。
+- **Google Calendar 同期**: 取得したイベント情報を Google Apps Script で作成したウェブアプリに送信し、Google Calendar にイベントとして登録します。
+- **自動化**: GitHub Actions を使用して、毎日定刻にスクレイピングと同期処理を自動で実行します。
+
+## 必要なもの
+
+- TimeTree アカウント
+- Google アカウント
+- Python 3.11 以降
+
+## セットアップ手順
+
+### 1. リポジトリのクローン
+
+```bash
+git clone https://github.com/your-username/py_timetree_scraper.git
+cd py_timetree_scraper
+```
+
+### 2. Google Apps Script (GAS) のデプロイ
+
+1.  [Google Apps Script](https://script.google.com/home) にアクセスし、新しいプロジェクトを作成します。
+2.  `gas.gs` ファイルの内容をコピーし、GAS エディタに貼り付けます。
+3.  プロジェクトを保存し、右上の「デプロイ」>「新しいデプロイ」を選択します。
+4.  「種類の選択」で「ウェブアプリ」を選択します。
+5.  以下の設定を行います。
+    - **説明**: (任意) `TimeTree Sync` など
+    - **次のユーザーとして実行**: 自分
+    - **アクセスできるユーザー**: 全員
+6.  「デプロイ」をクリックします。初回デプロイ時には、カレンダーへのアクセス許可を求められるので承認してください。
+7.  表示された**ウェブアプリ URL** をコピーしておきます。これは後で使います。
+
+### 3. Python 環境のセットアップ
+
+```bash
+# 仮想環境の作成
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# macOS/Linux
+# source .venv/bin/activate
+
+# 依存ライブラリのインストール
+pip install -r requirements.txt
+
+# Playwright のブラウザと依存関係をインストール
+playwright install --with-deps
+```
+
+### 4. 環境変数の設定
+
+`.env_sample` ファイルをコピーして `.env` という名前のファイルを作成します。
+
+```bash
+cp .env_sample .env
+```
+
+作成した `.env` ファイルを編集し、以下の情報を設定します。
+
+```dotenv
+TIMETREE_EMAIL=YOUR_TIMETREE_EMAIL
+TIMETREE_PASSWORD=YOUR_TIMETREE_PASSWORD
+GAS_WEBAPP_URL=YOUR_GAS_WEBAPP_URL
+```
+
+- `TIMETREE_EMAIL`: TimeTree のログインメールアドレス
+- `TIMETREE_PASSWORD`: TimeTree のログインパスワード
+- `GAS_WEBAPP_URL`: 手順2で取得した GAS のウェブアプリ URL
+
+### 5. GitHub Secrets の設定 (自動実行に必要)
+
+このリポジトリを GitHub にプッシュした後、Actions を正しく動作させるために、以下の情報をリポジトリの Secrets に登録する必要があります。
+
+1.  リポジトリの「Settings」>「Secrets and variables」>「Actions」に移動します。
+2.  「New repository secret」をクリックし、以下の3つの Secret を登録します。
+    - `TIMETREE_EMAIL`: TimeTree のログインメールアドレス
+    - `TIMETREE_PASSWORD`: TimeTree のログインパスワード
+    - `GAS_WEBAPP_URL`: 手順2で取得した GAS のウェブアプリ URL
+
+## 使い方
+
+### 手動実行
+
+ローカル環境でセットアップが完了していれば、以下のコマンドでスクリプトを手動実行できます。
+
+```bash
+python timetree_scraper.py
+```
+
+### 自動実行
+
+`.github/workflows/main.yml` に定義されたスケジュール (`cron: "0 0 * * *"`、毎日UTCの0時) に基づいて、GitHub Actions が自動的にスクリプトを実行します。
+また、リポジトリの「Actions」タブから `workflow_dispatch` を使って手動でワークフローをトリガーすることも可能です。
+
+## 処理の流れ
+
+1.  **GitHub Actions**: スケジュールされた時刻になると、ワークフローが開始されます。
+2.  **`timetree_scraper.py`**:
+    - Playwright を起動し、環境変数に設定された認証情報を使って TimeTree にログインします。
+    - カレンダーページから当月のイベント情報（タイトル、日付、時間）をスクレイピングします。
+3.  **POST to GAS**:
+    - 取得したイベント情報を JSON 形式にまとめ、環境変数 `GAS_WEBAPP_URL` に POST リクエストを送信します。
+4.  **`gas.gs` (ウェブアプリ)**:
+    - POST リクエストを受け取ります。
+    - JSON データを解析し、イベントごとに Google Calendar API を呼び出して、デフォルトカレンダーにイベントを作成します。
+    - 終日イベントと時間指定イベントの両方に対応しています。
+
+## ライセンス
+
+This project is licensed under the MIT License.
+
+
+
+---
+
+
+- フォルダ名: .
+- ファイル名: requirements.txt
+- 内容:
+playwright
+python-dotenv
+requests
+
+
+
+---
+
+
+- フォルダ名: .
+- ファイル名: timetree_scraper.py
+- 内容:
+import os
+import json
+import requests # 追加
+from playwright.sync_api import sync_playwright
+from dotenv import load_dotenv
+import re
+
+# 既存のロジックは変更なし
+load_dotenv()
+TIMETREE_EMAIL = os.getenv("TIMETREE_EMAIL")
+TIMETREE_PASSWORD = os.getenv("TIMETREE_PASSWORD")
+CALENDAR_URL = os.getenv("TIMETREE_CALENDAR_URL")
+GAS_WEBAPP_URL = os.getenv("GAS_WEBAPP_URL") # 追加
+
+# 既存のスクレイピング関数は変更なし
+def get_events_with_playwright_logic(page):
+    """
+    Playwrightの標準的なAPIを使用して、カレンダーのイベント情報を取得します。
+    """
+    events = []
+    month_year = page.locator('time').get_attribute('datetime')
+    event_elements = page.locator('.lndlxo5').all()
+    for event_element in event_elements:
+        style = event_element.get_attribute('style')
+        if not style:
+            continue
+        day_of_month_match = re.search(r'--lndlxo3: (\d+)', style)
+        if not day_of_month_match:
+            continue
+        day_of_month = int(day_of_month_match.group(1))
+        button = event_element.locator('button')
+        if button.count() > 0:
+            title_element = button.locator('.lndlxo9')
+            time_element = button.locator('._1r1c5vla')
+            if title_element.count() > 0:
+                title = title_element.inner_text()
+            else:
+                title = button.inner_text()
+            if time_element.count() > 0:
+                time = time_element.inner_text()
+            else:
+                time = None
+            event = {
+                'date': f"{month_year}-{str(day_of_month).zfill(2)}",
+                'time': time,
+                'title': title.strip()
+            }
+            events.append(event)
+    return events
+
+def main():
+    with sync_playwright() as p:
+        # 修正: GitHub Actionsで実行するためにheadless=Trueに変更
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+
+        # 既存のログイン処理は変更なし
+        page.goto(CALENDAR_URL, wait_until="networkidle")
+        page.fill('input[type="email"]', TIMETREE_EMAIL)
+        page.fill('input[type="password"]', TIMETREE_PASSWORD)
+        page.click('button[type="submit"]')
+        page.wait_for_timeout(5000)
+        page.wait_for_selector('[data-test-id="calendar-main"]')
+
+        # 既存のスクレイピング呼び出しは変更なし
+        events = get_events_with_playwright_logic(page)
+
+        print("--- Scraped Events ---")
+        print(json.dumps(events, indent=2, ensure_ascii=False))
+
+        # --- ここから追加したロジック ---
+        if GAS_WEBAPP_URL:
+            print("\n--- Sending data to Google Apps Script ---")
+            try:
+                headers = {'Content-Type': 'application/json'}
+                response = requests.post(GAS_WEBAPP_URL, data=json.dumps(events), headers=headers)
+                response.raise_for_status()  # ステータスコードが200番台でなければ例外を発生
+                print(f"Successfully sent data. Status: {response.status_code}")
+                print(f"Response from GAS: {response.text}")
+            except requests.exceptions.RequestException as e:
+                print(f"Error sending data to GAS: {e}")
+        else:
+            print("\nGAS_WEBAPP_URL is not set. Skipping sending data to GAS.")
+        # --- ここまで追加したロジック ---
+
+        browser.close()
+
+if __name__ == "__main__":
+    main()
+
+
+---
+
+
+- フォルダ名: ./.github/workflows
+- ファイル名: main.yml
+- 内容:
+
+# GitHub Actionsワークフローファイル
+# ファイル名: .github/workflows/main.yml
+
+name: Scrape TimeTree and Update Google Calendar
+
+on:
+  # 毎日午前0時 (UTC) に自動実行
+  # 日本時間の午前9時に相当します。時間は自由に変更してください。
+  # 例: 日本時間の午前7時にしたい場合 -> cron: "0 22 * * *"
+  schedule:
+    - cron: "0 0 * * *"
+  
+  # GitHubのActionsタブから手動で実行することも可能にする
+  workflow_dispatch:
+
+jobs:
+  scrape-and-update:
+    # 実行環境として最新のUbuntuを使用
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. リポジトリのコードをチェックアウト
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Python環境をセットアップ
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # 使用するPythonのバージョン
+
+      # 3. Pythonの依存ライブラリをインストール
+      # (requirements.txt ファイルをリポジトリのルートに作成する必要があります)
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      # 4. PlaywrightのブラウザとOS依存関係をインストール
+      - name: Install Playwright browsers
+        run: playwright install --with-deps
+
+      # 5. Pythonスクリプトを実行
+      # GitHub Secretsから認証情報を環境変数としてスクリプトに渡す
+      - name: Run scraper script
+        env:
+          TIMETREE_EMAIL: ${{ secrets.TIMETREE_EMAIL }}
+          TIMETREE_PASSWORD: ${{ secrets.TIMETREE_PASSWORD }}
+          GAS_WEBAPP_URL: ${{ secrets.GAS_WEBAPP_URL }}
+        run: python timetree_scraper.py
+
