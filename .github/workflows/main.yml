@@ -1,33 +1,44 @@
-name: Scrape TimeTree and Update Google Calendar
+# GitHub Actionsワークフローファイル
+# ファイル名: .github/workflows/main.yml
+
+name: Scrape TimeTree & Update G-Calendar
 
 on:
+  # 1時間ごとに自動実行 (cronのスケジュール)
   schedule:
     - cron: "0 */1 * * *"
+  
+  # GitHubのActionsタブから手動で実行することも可能にする
   workflow_dispatch:
 
 jobs:
   scrape-and-update:
+    # 実行環境として最新のUbuntuを使用
     runs-on: ubuntu-latest
+
+    # ジョブ全体の環境変数を設定
     env:
+      # タイムゾーンを日本時間に設定
       TZ: Asia/Tokyo
 
     steps:
+      # 1. リポジトリのコードをチェックアウト
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ステップ 2: Python環境をセットアップ
+      # 2. Python環境をセットアップ
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # ステップ 3: pipのキャッシュパスを取得
+      # 3. pipのキャッシュパスを取得
       - name: Get pip cache dir
         id: pip-cache
         run: |
           echo "dir=$(pip cache dir)" >> $GITHUB_OUTPUT
 
-      # ステップ 4: pipのキャッシュを有効化
+      # 4. pipの依存関係をキャッシュ
       - name: Cache pip dependencies
         uses: actions/cache@v4
         with:
@@ -36,19 +47,26 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      # ステップ 5: 依存ライブラリをインストール
+      # 5. Pythonの依存ライブラリをインストール (キャッシュがあれば高速化)
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       
-      # ステップ 6: Playwrightのキャッシュパスを取得
-      - name: Get Playwright cache dir
+      # 6. Playwrightのキャッシュパスを取得するためにNode.jsをセットアップ
+      - name: Set up Node.js for Playwright
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 7. Playwrightのキャッシュパスを動的に取得
+      - name: Get Playwright cache directory
         id: playwright-cache
         run: |
-          echo "dir=$(npx playwright print-driver-path | xargs -n 1 dirname)" >> $GITHUB_OUTPUT
+          # npxコマンドでPlaywrightのドライバパスを取得し、その親ディレクトリをキャッシュ対象とする
+          echo "dir=$(npx playwright print-driver-path | xargs dirname)" >> $GITHUB_OUTPUT
       
-      # ステップ 7: Playwrightのブラウザをキャッシュ
+      # 8. Playwrightのブラウザをキャッシュ
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
@@ -57,11 +75,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-playwright-
 
-      # ステップ 8: PlaywrightのブラウザとOS依存関係をインストール
+      # 9. PlaywrightのブラウザとOS依存関係をインストール (キャッシュがあれば高速化)
       - name: Install Playwright and dependencies
         run: playwright install --with-deps
 
-      # ステップ 9: Pythonスクリプトを実行
+      # 10. Pythonスクリプトを実行
       - name: Run scraper script
         env:
           TIMETREE_EMAIL: ${{ secrets.TIMETREE_EMAIL }}
