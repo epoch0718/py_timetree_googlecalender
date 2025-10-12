@@ -124,6 +124,11 @@ def main():
             headless=True,
             args=["--force-device-scale-factor=1.1"]
             )
+        
+        # 日本のタイムゾーン（Asia/Tokyo）を指定して、新しいブラウザコンテキストを作成
+        context = browser.new_context(
+            timezone_id="Asia/Tokyo"
+        )
         page = browser.new_page()
 
         print("Navigating to calendar and logging in...")
