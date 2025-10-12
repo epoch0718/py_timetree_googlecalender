@@ -1,41 +1,67 @@
-
-# GitHub Actionsワークフローファイル
-# ファイル名: .github/workflows/main.yml
-
 name: Scrape TimeTree and Update Google Calendar
 
 on:
-  # 毎日午前0時 (UTC) に自動実行
-  # 日本時間の午前9時に相当します。時間は自由に変更してください。
-  # 例: 日本時間の午前7時にしたい場合 -> cron: "0 22 * * *"
   schedule:
     - cron: "0 */1 * * *"
-  
-  # GitHubのActionsタブから手動で実行することも可能にする
   workflow_dispatch:
 
 jobs:
   scrape-and-update:
-    # 実行環境として最新のUbuntuを使用
     runs-on: ubuntu-latest
-
     env:
       TZ: Asia/Tokyo
 
     steps:
-      # 1. リポジトリのコードをチェックアウト
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. 依存関係をインストール（キャッシュ有効化）
-      - name: Setup Python, Dependencies and Playwright
-        uses: microsoft/playwright-python-action@v1
+      # ステップ 2: Python環境をセットアップ
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          # requirements.txt を使って依存関係をインストールするように指示
-          install-deps-from: 'requirements.txt'
+          python-version: '3.11'
 
-      # 3. Pythonスクリプトを実行
-      # GitHub Secretsから認証情報を環境変数としてスクリプトに渡す
+      # ステップ 3: pipのキャッシュパスを取得
+      - name: Get pip cache dir
+        id: pip-cache
+        run: |
+          echo "dir=$(pip cache dir)" >> $GITHUB_OUTPUT
+
+      # ステップ 4: pipのキャッシュを有効化
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pip-cache.outputs.dir }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # ステップ 5: 依存ライブラリをインストール
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      # ステップ 6: Playwrightのキャッシュパスを取得
+      - name: Get Playwright cache dir
+        id: playwright-cache
+        run: |
+          echo "dir=$(npx playwright print-driver-path | xargs -n 1 dirname)" >> $GITHUB_OUTPUT
+      
+      # ステップ 7: Playwrightのブラウザをキャッシュ
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.playwright-cache.outputs.dir }}
+          key: ${{ runner.os }}-playwright-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      # ステップ 8: PlaywrightのブラウザとOS依存関係をインストール
+      - name: Install Playwright and dependencies
+        run: playwright install --with-deps
+
+      # ステップ 9: Pythonスクリプトを実行
       - name: Run scraper script
         env:
           TIMETREE_EMAIL: ${{ secrets.TIMETREE_EMAIL }}
@@ -43,4 +69,3 @@ jobs:
           TIMETREE_CALENDAR_URL: ${{ secrets.TIMETREE_CALENDAR_URL }}
           GAS_WEBAPP_URL: ${{ secrets.GAS_WEBAPP_URL }}
         run: python timetree_scraper.py
-
