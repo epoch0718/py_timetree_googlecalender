@@ -1,5 +1,5 @@
 // このスクリプトが管理するイベントであることを示すための「目印」
-const SYNC_TAG = '\u200B[TimeTree]\u200B'; // 見えない文字(ゼロ幅スペース)で囲んだタグ
+const SYNC_TAG = '[TimeTree]'; // 見えない文字(ゼロ幅スペース)で囲んだタグ
 
 /**
  * 12時間表記(AM/PM)の時刻文字列をパースして、Dateオブジェクトを生成するヘルパー関数
@@ -51,10 +51,14 @@ function doPost(e) {
   let createdCount = 0;
   let updatedCount = 0;
   let deletedCount = 0;
+
+  let debugExistingEvents = []; 
   
   try {
     const timetreeEvents = JSON.parse(e.postData.contents);
-    const calendar = CalendarApp.getDefaultCalendar();
+    //const calendar = CalendarApp.getDefaultCalendar();
+    const calendar = CalendarApp.getCalendarById('epoch.making.glass@gmail.com'); 
+    
     
     logs.push(`Received ${timetreeEvents.length} events to process from TimeTree.`);
     if (timetreeEvents.length === 0) {
@@ -72,24 +76,54 @@ function doPost(e) {
     const existingEvents = calendar.getEvents(firstDayOfMonth, lastDayOfMonth)
       .filter(event => {
         try {
-          return event.getDescription().includes(SYNC_TAG);
+          //return event.getDescription().includes(SYNC_TAG);
+          return event.getDescription().startsWith(SYNC_TAG);
         } catch (err) {
           return false;
         }
       });
+
+    // デバッグのため、取得した既存イベントの情報を整形して保存
+    debugExistingEvents = existingEvents.map(event => {
+      const startTime = event.getStartTime();
+      const dateStrJST = Utilities.formatDate(startTime, "Asia/Tokyo", "yyyy-MM-dd");
+      return {
+        title: event.getTitle(),
+        startTime_raw: startTime.toString(),
+        startTime_jst_formatted: dateStrJST,
+        generated_key: createEventKey(event.getTitle(), dateStrJST)
+      };
+    });
       
     // 高速で検索できるように、既存イベントをMapに変換する
     const googleEventsMap = new Map();
     existingEvents.forEach(event => {
+      /*
       const key = createEventKey(event.getTitle(), Utilities.formatDate(event.getStartTime(), Session.getScriptTimeZone(), "yyyy-MM-dd"));
+      */
+      // 1. イベントの開始時刻をDateオブジェクトとして取得
+      const startTime = event.getStartTime();
+      
+      // 2. タイムゾーンを指定して、"yyyy-MM-dd"形式の文字列に変換
+      //    これならプロジェクト設定に依存せず、常に日本時間で日付が計算される
+      const dateStr = Utilities.formatDate(startTime, "Asia/Tokyo", "yyyy-MM-dd");
+      
+      // 3. 修正された日付文字列でキーを生成
+      const key = createEventKey(event.getTitle(), dateStr);
+
       googleEventsMap.set(key, event);
+
     });
     logs.push(`Found ${googleEventsMap.size} existing synced events in Google Calendar for ${year}-${month + 1}.`);
 
     // --- 2. TimeTreeの予定を名簿と照合し、更新または新規作成 ---
     timetreeEvents.forEach(ttEvent => {
       const key = createEventKey(ttEvent.title, ttEvent.date);
-      const options = { description: SYNC_TAG + "\n" + (ttEvent.memo || "") };
+      //const options = { description: SYNC_TAG + "\n" + (ttEvent.memo || "") };
+      const memo = ttEvent.memo || "";
+      // SYNC_TAG とメモを単純に改行で結合する
+      const description = `${SYNC_TAG}\n${memo}`;
+      const options = { description: description };
 
       if (googleEventsMap.has(key)) {
         // **【更新処理】** 既存の予定が見つかった場合
@@ -155,7 +189,14 @@ function doPost(e) {
   }
   
   return ContentService
-    .createTextOutput(JSON.stringify({ status: statusMessage, logs: logs }))
+    .createTextOutput(JSON.stringify(
+      { 
+        status: statusMessage, 
+        logs: logs,
+        debug_data: {
+          google_calendar_events_found: debugExistingEvents
+        } 
+      }))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -204,4 +245,45 @@ function triggerGitHubActionsWorkflow() {
   } catch (e) {
     Logger.log(`エラーが発生しました: ${e.toString()}`);
   }
+}
+
+/**
+ * 【手動テスト用】doPost関数をエディタから実行するための関数
+ * Pythonから送られてくるのと同じ形式のテストデータを擬似的に作成し、doPostを呼び出します。
+ */
+function testDoPost() {
+  // --- ▼ Pythonから送られてくるデータをここに再現します ▼ ---
+  const testEvents = [
+    {
+      "date": "2025-10-12", // 既存
+      "time": "5:00 PM",   // 既存
+      "title": "10/12 1700",
+      "memo": "メモメモ111"
+    },
+    {
+      "date": "2025-10-14", // 新規
+      "time": "7:00 PM",  // 新規
+      "title": "手動テストイベント 2",
+      "memo": "これも手動テストです。\n改行もOK。"
+    }
+  ];
+  // --- ▲ テストデータここまで ▲ ---
+
+  // doPostに渡すための、擬似的なイベントオブジェクト`e`を作成
+  const mockEventObject = {
+    postData: {
+      contents: JSON.stringify(testEvents)
+    }
+  };
+
+  Logger.log("★★★ testDoPost を開始します ★★★");
+  
+  // 擬似的な`e`を使って、doPost関数を呼び出す
+  const response = doPost(mockEventObject);
+  
+  // doPostから返ってきた結果をログに出力
+  Logger.log("--- doPostからのレスポンス ---");
+  Logger.log(response.getContent());
+  
+  Logger.log("★★★ testDoPost が完了しました ★★★");
 }
