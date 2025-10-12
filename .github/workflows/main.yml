@@ -67,29 +67,37 @@ jobs:
           GAS_WEBAPP_URL: ${{ secrets.GAS_WEBAPP_URL }}
         run: python timetree_scraper.py
 
-      # 8. 実行結果をジョブサマリーに出力
-      - name: Post execution summary
-        run: |
-          echo "## 実行結果サマリー" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **ワークフロー名**: ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **実行トリガー**: `${{ github.event_name }}`" >> $GITHUB_STEP_SUMMARY
-          echo "- **ステータス**: **成功** ✅" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 実行時間" >> $GITHUB_STEP_SUMMARY
-          echo "| 開始時刻 (UTC) | 終了時刻 (UTC) | 実行時間 |" >> $GITHUB_STEP_SUMMARY
-          echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
-          
-          # ジョブの開始時刻と現在時刻から実行時間を計算
-          # macOS/Windowsでは date コマンドの互換性がないため、Linux (ubuntu-latest) 前提
-          START_TIME=$(date -d "${{ job.started_at }}" +%s)
-          END_TIME=$(date +%s)
-          DURATION=$((END_TIME - START_TIME))
-          
-          # 実行時間を 分:秒 形式にフォーマット
-          MINUTES=$((DURATION / 60))
-          SECONDS=$((DURATION % 60))
-          
-          echo "| `${{ job.started_at }}` | `$(date -u -Iseconds)` | **${MINUTES}分 ${SECONDS}秒** |" >> $GITHUB_STEP_SUMMARY
-
-      # ★★★ 追加ここまで ★★★
+      # 8. 実行結果をジョブサマリーに計算して出力
+      - name: Calculate and Post Execution Summary
+        # ジョブが成功しても失敗しても、必ずこのステップを実行する
+        if: always()
+        # 公式のgithub-scriptアクションを使用
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // ワークフローの開始時刻と現在時刻（このステップの実行時刻）を取得
+            const startTime = new Date('${{ job.started_at }}');
+            const endTime = new Date();
+            
+            // ミリ秒単位で差を計算
+            const durationMs = endTime - startTime;
+            
+            // 分と秒に変換
+            const minutes = Math.floor(durationMs / 60000);
+            const seconds = ((durationMs % 60000) / 1000).toFixed(0);
+            const durationStr = `${minutes}分 ${seconds}秒`;
+            
+            // ジョブサマリーを生成
+            await core.summary
+              .addHeading('実行結果サマリー', 2) // h2見出し
+              .addList([
+                `**ワークフロー名**: ${{ github.workflow }}`,
+                `**実行トリガー**: \`${{ github.event_name }}\``,
+                `**ステータス**: ${'${{ job.status }}' === 'success' ? '**成功** ✅' : '**失敗** ❌'}`
+              ])
+              .addHeading('実行時間', 3) // h3見出し
+              .addTable([
+                [ {data: '開始時刻 (UTC)', header: true}, {data: '終了時刻 (UTC)', header: true}, {data: '実行時間', header: true} ],
+                [ '`${{ job.started_at }}`', '`' + endTime.toISOString() + '`', `**${durationStr}**` ]
+              ])
+              .write(); // サマリーに書き込む
