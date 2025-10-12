@@ -4,53 +4,61 @@
 name: Scrape TimeTree and Update Google Calendar
 
 on:
-  # 毎日午前0時 (UTC) に自動実行
-  # 日本時間の午前9時に相当します。時間は自由に変更してください。
-  # 例: 日本時間の午前7時にしたい場合 -> cron: "0 22 * * *"
   schedule:
     - cron: "0 */1 * * *"
-  
-  # GitHubのActionsタブから手動で実行することも可能にする
   workflow_dispatch:
 
 jobs:
   scrape-and-update:
-    # 実行環境として最新のUbuntuを使用
     runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Tokyo
 
     steps:
       # 1. リポジトリのコードをチェックアウト
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Python環境をセットアップ (pipキャッシュを有効化)
+      # 2. Python環境をセットアップ
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip' # requirements.txt に基づいてpipの依存関係をキャッシュ
+          cache: 'pip' # pipのキャッシュはこれが一番シンプルで十分
 
-      # 3. Pythonの依存ライブラリをインストール (キャッシュがあれば高速化)
+      # 3. 依存ライブラリをインストール
       - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
       
-      # 4. Playwrightのブラウザをキャッシュ
+      # ★★★ ここからがQiita記事のアイデアを取り入れた修正部分 ★★★
+      # https://qiita.com/ohakutsu/items/8e4c10cad360bf4cda04
+
+      # 4. Playwrightのバージョンを取得
+      - name: Get Playwright version
+        id: playwright-version
+        run: |
+          echo "VERSION=$(pip show playwright | grep Version | cut -d ' ' -f 2)" >> $GITHUB_ENV
+      
+      # 5. Playwrightのブラウザをキャッシュ
+      #    キャッシュキーにPlaywrightのバージョンを含める
       - name: Cache Playwright browsers
+        id: cache-playwright # このステップにIDを付けて後で参照する
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('**/requirements.txt') }}
+          key: ${{ runner.os }}-playwright-${{ env.VERSION }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            ${{ runner.os }}-playwright-
+            ${{ runner.os }}-playwright-${{ env.VERSION }}-
 
-      # 5. PlaywrightのブラウザとOS依存関係をインストール (キャッシュがあれば高速化)
-      - name: Install Playwright browsers
+      # 6. Playwrightのブラウザと依存関係をインストール
+      #    【重要】キャッシュがヒットしなかった場合のみ、このステップを実行する
+      - name: Install Playwright browsers and dependencies
+        if: steps.cache-playwright.outputs.cache-hit != 'true'
         run: playwright install --with-deps
 
-      # 6. Pythonスクリプトを実行
-      # GitHub Secretsから認証情報を環境変数としてスクリプトに渡す
+      # ★★★ 修正ここまで ★★★
+
+      # 7. Pythonスクリプトを実行
       - name: Run scraper script
         env:
           TIMETREE_EMAIL: ${{ secrets.TIMETREE_EMAIL }}
