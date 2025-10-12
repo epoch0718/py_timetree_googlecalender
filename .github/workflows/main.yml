@@ -102,13 +102,13 @@ jobs:
             await core.summary
               .addHeading('実行結果サマリー', 2) // h2見出し
               .addList([
-                ` **ワークフロー名** : ${{ github.workflow }}`,
-                `**実行トリガー**: \`${{ github.event_name }}\``,
-                `**ステータス**: ${'${{ job.status }}' === 'success' ? ' **成功** ✅' : ' **失敗** ❌'}`
+                `ワークフロー名 : ${{ github.workflow }}`,
+                `実行トリガー   : \`${{ github.event_name }}\``,
+                `ステータス     : ${'${{ job.status }}' === 'success' ? ' 成功 ✅' : ' 失敗 ❌'}`
               ])
               .addHeading('実行日時', 3) // h3見出し
               .addTable([
                 [ {data: '終了 (JST)', header: true} ],
-                [  '`' + endTimeJST + '`'  ]
+                [  endTimeJST ]
               ])
               .write(); // サマリーに書き込む
