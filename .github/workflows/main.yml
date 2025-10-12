@@ -1,7 +1,7 @@
 # GitHub Actionsワークフローファイル
 # ファイル名: .github/workflows/main.yml
 
-name: Scrape TimeTree and Update Google Calendar
+name: Scrape TimeTree and Update G-Calendar
 
 on:
   schedule:
@@ -69,35 +69,46 @@ jobs:
 
       # 8. 実行結果をジョブサマリーに計算して出力
       - name: Calculate and Post Execution Summary
-        # ジョブが成功しても失敗しても、必ずこのステップを実行する
         if: always()
-        # 公式のgithub-scriptアクションを使用
         uses: actions/github-script@v7
         with:
+          # github-tokenはcontextにアクセスするために必要
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            // ワークフローの開始時刻と現在時刻（このステップの実行時刻）を取得
-            const startTime = new Date('${{ job.started_at }}');
-            const endTime = new Date();
-            
+            // 【修正点】github.contextからジョブ情報を取得する
+            const job = (await github.rest.actions.getJobForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+              job_id: context.job,
+            })).data;
+
+            const startTime = new Date(job.started_at);
+            const endTime = new Date(job.completed_at); // より正確な終了時刻を使用
+
             // ミリ秒単位で差を計算
             const durationMs = endTime - startTime;
             
             // 分と秒に変換
             const minutes = Math.floor(durationMs / 60000);
             const seconds = ((durationMs % 60000) / 1000).toFixed(0);
-            const durationStr = `${minutes}分 ${seconds}秒`;
             
+            // どちらかがNaNになった場合のフォールバック
+            const durationStr = (isNaN(minutes) || isNaN(seconds)) 
+              ? '(計算エラー)' 
+              : `${minutes}分 ${seconds}秒`;
+
             // ジョブサマリーを生成
             await core.summary
-              .addHeading('実行結果サマリー', 2) // h2見出し
+              .addHeading('実行結果サマリー', 2)
               .addList([
-                `**ワークフロー名**: ${{ github.workflow }}`,
-                `**実行トリガー**: \`${{ github.event_name }}\``,
-                `**ステータス**: ${'${{ job.status }}' === 'success' ? '**成功** ✅' : '**失敗** ❌'}`
+                `**ワークフロー名**: ${context.workflow}`,
+                `**実行トリガー**: \`${context.eventName}\``,
+                `**ステータス**: ${job.conclusion === 'success' ? '**成功** ✅' : '**失敗** ❌'}`
               ])
-              .addHeading('実行時間', 3) // h3見出し
+              .addHeading('実行時間', 3)
               .addTable([
                 [ {data: '開始時刻 (UTC)', header: true}, {data: '終了時刻 (UTC)', header: true}, {data: '実行時間', header: true} ],
-                [ '`${{ job.started_at }}`', '`' + endTime.toISOString() + '`', `**${durationStr}**` ]
+                [ '`' + job.started_at + '`', '`' + job.completed_at + '`', `**${durationStr}**` ]
               ])
-              .write(); // サマリーに書き込む
+              .write();
