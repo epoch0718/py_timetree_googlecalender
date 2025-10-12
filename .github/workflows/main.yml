@@ -86,18 +86,29 @@ jobs:
             const minutes = Math.floor(durationMs / 60000);
             const seconds = ((durationMs % 60000) / 1000).toFixed(0);
             const durationStr = `${minutes}分 ${seconds}秒`;
+
+            const jstOptions = {
+              timeZone: 'Asia/Tokyo',
+              year: 'numeric', month: '2-digit', day: '2-digit',
+              hour: '2-digit', minute: '2-digit', second: '2-digit',
+              hour12: false // 24時間表記
+            };
+
+            // JSTに変換した文字列を取得
+            //const startTimeJST = startTime.toLocaleString('ja-JP', jstOptions);
+            const endTimeJST = endTime.toLocaleString('ja-JP', jstOptions);
             
             // ジョブサマリーを生成
             await core.summary
               .addHeading('実行結果サマリー', 2) // h2見出し
               .addList([
-                `**ワークフロー名**: ${{ github.workflow }}`,
+                ` **ワークフロー名** : ${{ github.workflow }}`,
                 `**実行トリガー**: \`${{ github.event_name }}\``,
-                `**ステータス**: ${'${{ job.status }}' === 'success' ? '**成功** ✅' : '**失敗** ❌'}`
+                `**ステータス**: ${'${{ job.status }}' === 'success' ? ' **成功** ✅' : ' **失敗** ❌'}`
               ])
-              .addHeading('実行時間', 3) // h3見出し
+              .addHeading('実行日時', 3) // h3見出し
               .addTable([
-                [ {data: '開始時刻 (UTC)', header: true}, {data: '終了時刻 (UTC)', header: true}, {data: '実行時間', header: true} ],
-                [ '`${{ job.started_at }}`', '`' + endTime.toISOString() + '`', `**${durationStr}**` ]
+                [ {data: '終了 (JST)', header: true} ],
+                [  '`' + endTimeJST + '`'  ]
               ])
               .write(); // サマリーに書き込む
