@@ -1,4 +1,5 @@
-const SYNC_TAG = '\u200B[ttsync]\u200B'; // 見えない文字(ゼロ幅スペース)で囲んだタグ
+// このスクリプトが管理するイベントであることを示すための「目印」
+const SYNC_TAG = '\u200B[TimeTree]\u200B'; // 見えない文字(ゼロ幅スペース)で囲んだタグ
 
 /**
  * 12時間表記(AM/PM)の時刻文字列をパースして、Dateオブジェクトを生成するヘルパー関数
@@ -7,12 +8,15 @@ const SYNC_TAG = '\u200B[ttsync]\u200B'; // 見えない文字(ゼロ幅スペ�
  * @returns {Date}
  */
 function parseDateTime(dateStr, timeStr) {
+  // この関数は変更なし
   const dateParts = dateStr.split('-');
   const year = parseInt(dateParts[0], 10);
-  const month = parseInt(dateParts[1], 10) - 1; // 月は0-indexed
+  const month = parseInt(dateParts[1], 10) - 1;
   const day = parseInt(dateParts[2], 10);
 
   const timeMatch = timeStr.match(/(\d+):(\d+)\s(AM|PM)/);
+  if (!timeMatch) return null; // 不正な形式の場合はnullを返す
+
   let hour = parseInt(timeMatch[1], 10);
   const minute = parseInt(timeMatch[2], 10);
   const ampm = timeMatch[3];
@@ -20,11 +24,21 @@ function parseDateTime(dateStr, timeStr) {
   if (ampm === 'PM' && hour < 12) {
     hour += 12;
   }
-  if (ampm === 'AM' && hour === 12) { // 深夜12時(12:00 AM)のケース
+  if (ampm === 'AM' && hour === 12) {
     hour = 0;
   }
 
   return new Date(year, month, day, hour, minute);
+}
+
+/**
+ * イベントのユニークなキーを生成する関数
+ * @param {string} title - イベントのタイトル
+ * @param {string} dateStr - "YYYY-MM-DD"形式の日付文字列
+ * @returns {string} - "タイトル-YYYY-MM-DD" 形式のキー
+ */
+function createEventKey(title, dateStr) {
+  return `${title}-${dateStr}`;
 }
 
 /**
@@ -34,31 +48,29 @@ function parseDateTime(dateStr, timeStr) {
 function doPost(e) {
   const logs = [];
   let statusMessage = "";
-  let deletedCount = 0;
   let createdCount = 0;
-
+  let updatedCount = 0;
+  let deletedCount = 0;
+  
   try {
-    const events = JSON.parse(e.postData.contents);
+    const timetreeEvents = JSON.parse(e.postData.contents);
     const calendar = CalendarApp.getDefaultCalendar();
     
-    logs.push(`Received ${events.length} events to process.`);
+    logs.push(`Received ${timetreeEvents.length} events to process from TimeTree.`);
+    if (timetreeEvents.length === 0) {
+      logs.push("No events to process. Sync finished.");
+      return ContentService.createTextOutput(JSON.stringify({ status: "No events received.", logs: logs })).setMimeType(ContentService.MimeType.JSON);
+    }
 
-    // --- 1. 既存の同期済みイベントを削除 ---
-    if (events.length > 0) {
-      const firstEventDate = new Date(events[0].date);
-      const year = firstEventDate.getFullYear();
-      const month = firstEventDate.getMonth();
+    // --- 1. 既存の同期済みイベントの名簿を作成 ---
+    const firstEventDate = new Date(timetreeEvents[0].date);
+    const year = firstEventDate.getFullYear();
+    const month = firstEventDate.getMonth();
+    const firstDayOfMonth = new Date(year, month, 1);
+    const lastDayOfMonth = new Date(year, month + 1, 0, 23, 59, 59);
 
-      const firstDayOfMonth = new Date(year, month, 1);
-      const lastDayOfMonth = new Date(year, month + 1, 0, 23, 59, 59);
-
-      logs.push(`Cleaning up events for ${year}-${month + 1}.`);
-
-      // 対象月の全てのイベントを取得
-      const allEventsInMonth = calendar.getEvents(firstDayOfMonth, lastDayOfMonth);
-      
-      // その中から、説明欄に目印(SYNC_TAG)が含まれるものをフィルタリング
-      const eventsToDelete = allEventsInMonth.filter(event => {
+    const existingEvents = calendar.getEvents(firstDayOfMonth, lastDayOfMonth)
+      .filter(event => {
         try {
           return event.getDescription().includes(SYNC_TAG);
         } catch (err) {
@@ -66,53 +78,130 @@ function doPost(e) {
         }
       });
       
-      if (eventsToDelete.length > 0) {
-        logs.push(`Found ${eventsToDelete.length} existing synced events to delete.`);
-        eventsToDelete.forEach(event => {
-          event.deleteEvent();
-        });
-        deletedCount = eventsToDelete.length;
+    // 高速で検索できるように、既存イベントをMapに変換する
+    const googleEventsMap = new Map();
+    existingEvents.forEach(event => {
+      const key = createEventKey(event.getTitle(), Utilities.formatDate(event.getStartTime(), Session.getScriptTimeZone(), "yyyy-MM-dd"));
+      googleEventsMap.set(key, event);
+    });
+    logs.push(`Found ${googleEventsMap.size} existing synced events in Google Calendar for ${year}-${month + 1}.`);
+
+    // --- 2. TimeTreeの予定を名簿と照合し、更新または新規作成 ---
+    timetreeEvents.forEach(ttEvent => {
+      const key = createEventKey(ttEvent.title, ttEvent.date);
+      const options = { description: SYNC_TAG + "\n" + (ttEvent.memo || "") };
+
+      if (googleEventsMap.has(key)) {
+        // **【更新処理】** 既存の予定が見つかった場合
+        const existingEvent = googleEventsMap.get(key);
+        let needsUpdate = false;
+
+        // メモの比較と更新
+        if (existingEvent.getDescription() !== options.description) {
+          existingEvent.setDescription(options.description);
+          needsUpdate = true;
+        }
+
+        // 時間の比較と更新
+        if (ttEvent.time) { // 時間指定イベントの場合
+          const newStartTime = parseDateTime(ttEvent.date, ttEvent.time);
+          const newEndTime = new Date(newStartTime.getTime() + (60 * 60 * 1000));
+          if (existingEvent.getStartTime().getTime() !== newStartTime.getTime() || existingEvent.getEndTime().getTime() !== newEndTime.getTime()) {
+            existingEvent.setTime(newStartTime, newEndTime);
+            needsUpdate = true;
+          }
+        }
+        
+        if (needsUpdate) {
+          logs.push(`Updating event: '${ttEvent.title}'`);
+          updatedCount++;
+        }
+        
+        googleEventsMap.delete(key); // 処理済みとして名簿から削除
+
       } else {
-        logs.push("No existing synced events to delete.");
+        // **【新規作成処理】** 既存の予定が見つからなかった場合
+        logs.push(`Creating new event: '${ttEvent.title}'`);
+        if (ttEvent.time) {
+          const startTime = parseDateTime(ttEvent.date, ttEvent.time);
+          const endTime = new Date(startTime.getTime() + (60 * 60 * 1000));
+          calendar.createEvent(ttEvent.title, startTime, endTime, options);
+        } else {
+          const eventDate = new Date(ttEvent.date);
+          const utcDate = new Date(eventDate.getUTCFullYear(), eventDate.getUTCMonth(), eventDate.getUTCDate());
+          calendar.createAllDayEvent(ttEvent.title, utcDate, options);
+        }
+        createdCount++;
       }
+    });
+
+    // --- 3. 名簿に残り、不要になった予定を削除 ---
+    if (googleEventsMap.size > 0) {
+      logs.push(`Deleting ${googleEventsMap.size} events that no longer exist in TimeTree.`);
+      googleEventsMap.forEach(eventToDelete => {
+        logs.push(` - Deleting: '${eventToDelete.getTitle()}'`);
+        eventToDelete.deleteEvent();
+        deletedCount++;
+      });
     }
 
-    // --- 2. 新しいイベントを登録 ---
-    logs.push("Creating new events from TimeTree data...");
-    events.forEach(eventData => {
-      const title = eventData.title;
-      const dateStr = eventData.date;
-      const timeStr = eventData.time;
-      const options = { description: SYNC_TAG };
-
-      logs.push(`Processing: '${title}'`);
-
-      if (timeStr) {
-        const startTime = parseDateTime(dateStr, timeStr);
-        const endTime = new Date(startTime.getTime() + (60 * 60 * 1000));
-        calendar.createEvent(title, startTime, endTime, options);
-      } else {
-        const eventDate = new Date(dateStr);
-        const utcDate = new Date(eventDate.getUTCFullYear(), eventDate.getUTCMonth(), eventDate.getUTCDate());
-        calendar.createAllDayEvent(title, utcDate, options);
-      }
-      createdCount++;
-    });
-    
-    statusMessage = `Sync complete. Deleted: ${deletedCount}, Created: ${createdCount}.`;
+    statusMessage = `Sync complete. Created: ${createdCount}, Updated: ${updatedCount}, Deleted: ${deletedCount}.`;
     logs.push(statusMessage);
-    
+
   } catch (error) {
-    statusMessage = "Error processing request: " + error.toString() + " at line " + error.lineNumber;
-    logs.push(statusMessage);
-    logs.push("Stack: " + error.stack);
-    logs.push("Received data: " + e.postData.contents);
+    statusMessage = "Error processing request: " + error.toString();
+    logs.push(statusMessage, error.stack);
+    logs.push("Received data: " + (e ? e.postData.contents : "N/A"));
   }
   
   return ContentService
-    .createTextOutput(JSON.stringify({ 
-        status: statusMessage,
-        logs: logs 
-    }))
+    .createTextOutput(JSON.stringify({ status: statusMessage, logs: logs }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+
+/**
+ * GitHub Actionsのワークフローを起動します。
+ */
+function triggerGitHubActionsWorkflow() {
+  // --- ▼ あなたの情報に合わせて変更してください ▼ ---
+  const GITHUB_OWNER = 'epoch0718'; // あなたのGitHubユーザー名
+  const GITHUB_REPO = 'py_timetree_googlecalender'; // リポジトリ名
+  const WORKFLOW_FILE_NAME = 'main.yml';      // ワークフローのファイル名
+  const GIT_BRANCH = 'main';                  // 対象のブランチ名
+  // --- ▲ 設定ここまで ▲ ---
+
+  // スクリプトプロパティから安全にPATを取得
+  const GITHUB_PAT = PropertiesService.getScriptProperties().getProperty('GITHUB_PAT');
+  
+  if (!GITHUB_PAT) {
+    Logger.log('エラー: スクリプトプロパティに GITHUB_PAT が設定されていません。');
+    return;
+  }
+
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/workflows/${WORKFLOW_FILE_NAME}/dispatches`;
+
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    headers: {
+      'Accept': 'application/vnd.github.v3+json',
+      'Authorization': `token ${GITHUB_PAT}`
+    },
+    payload: JSON.stringify({
+      'ref': GIT_BRANCH
+    })
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(url, options);
+    // レスポンスコード204は成功を意味する
+    if (response.getResponseCode() === 204) {
+      Logger.log('GitHub Actionsワークフローの起動に成功しました。');
+    } else {
+      Logger.log(`ワークフローの起動に失敗しました。ステータスコード: ${response.getResponseCode()}, レスポンス: ${response.getContentText()}`);
+    }
+  } catch (e) {
+    Logger.log(`エラーが発生しました: ${e.toString()}`);
+  }
 }

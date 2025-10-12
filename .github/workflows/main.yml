@@ -19,6 +19,9 @@ jobs:
     # 実行環境として最新のUbuntuを使用
     runs-on: ubuntu-latest
 
+    env:
+      TZ: Asia/Tokyo
+
     steps:
       # 1. リポジトリのコードをチェックアウト
       - name: Checkout repository

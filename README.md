@@ -1,123 +1,139 @@
-# TimeTree to Google Calendar Scraper
+はい、承知いたしました。
+`GAS`から`GitHub Actions`を起動する際に必要な`GITHUB_PAT`の登録手順も含めて、初心者の方にもさらに分かりやすくなるように全体を再構成し、README.mdを再出力します。
 
-## 概要
+---
 
-このプロジェクトは、[TimeTree](https://timetreeapp.com/) のカレンダーから予定を自動的にスクレイピングし、指定した Google Calendar に同期するためのツールです。
-Playwright を使用して TimeTree から情報を取得し、Google Apps Script (GAS) を介して Google Calendar にイベントを登録します。
-一連の処理は GitHub Actions によって定期的に自動実行されます。
+# TimeTree to Google Calendar Sync Tool 🤖
 
-## 主な機能
+## 1. このツールで何ができるの？ 🤔
 
-- **TimeTree スクレイピング**: Playwright を利用して、TimeTree のウェブサイトにログインし、カレンダーのイベント情報を取得します。
-- **Google Calendar 同期**: 取得したイベント情報を Google Apps Script で作成したウェブアプリに送信し、Google Calendar にイベントとして登録します。
-- **自動化**: GitHub Actions を使用して、毎日定刻にスクレイピングと同期処理を自動で実行します。
+このツールは、**TimeTreeカレンダーに入力した予定を、自動的にあなたのGoogleカレンダーにコピー（同期）してくれる**便利なプログラムです。
 
-## 必要なもの
+一度設定してしまえば、あとはプログラムが定期的にTimeTreeをチェックし、Googleカレンダーを最新の状態に保ってくれます。これにより、以下のようなことが可能になります。
 
-- TimeTree アカウント
-- Google アカウント
-- Python 3.11 以降
+*   TimeTreeの予定を、Googleカレンダーと連携する他のサービス（例: Notion）で使えるようになります。
+*   家族や友人とはTimeTreeで、個人の予定管理はGoogleカレンダーで、という使い分けがスムーズになります。
 
-## セットアップ手順
+<br>
 
-### 1. リポジトリのクローン
+## 2. どんな仕組みで動いているの？ ⚙️
 
-```bash
-git clone https://github.com/your-username/py_timetree_scraper.git
-cd py_timetree_scraper
+このツールは、3つの部品が連携して動作します。
+
+1.  **Pythonスクリプト ( `timetree_scraper.py` )**
+    *   あなたの代わりにTimeTreeのウェブサイトにログインし、カレンダーの予定（タイトル、日時、メモ）を読み取ります。ブラウザを自動で操作する「Playwright」という技術を使っています。
+
+2.  **Google Apps Script ( `gas.gs` )**
+    *   Pythonから受け取った予定のデータを使って、あなたのGoogleカレンダーに予定を書き込みます。一度書き込んだ予定は、TimeTree側で変更・削除されると、それに合わせてGoogleカレンダー側も自動で更新・削除される賢い仕組み（差分同期）になっています。
+    *   また、「今すぐ同期したい！」という時のために、GitHub Actionsを呼び出すスイッチの役割も持っています。
+
+3.  **GitHub Actions ( `.github/workflows/main.yml` )**
+    *   この仕組み全体を、あなたが寝ている間も自動で動かし続けてくれる縁の下の力持ちです。設定した時間になると、自動的にPythonスクリプトを起動してくれます。
+
+<br>
+
+## 3. 必要なものリスト ✅
+
+このツールを使うには、いくつかのアカウントや情報が必要です。
+
+*   **TimeTreeのアカウント**
+    *   ログイン用のメールアドレスとパスワード
+    *   同期したいカレンダーのURL
+*   **Googleのアカウント**
+    *   同期先のGoogleカレンダー
+*   **GitHubのアカウント**
+    *   プログラムを設置し、自動実行させるための場所
+*   **Pythonが動くパソコン**
+    *   最初のセットアップや、手動でテストする時に使います。
+
+---
+
+## 4. セットアップ手順（使い方） 🚀
+
+少し手順が多いですが、一つずつ丁寧に進めれば大丈夫です！
+
+### ステップ1：Google側の準備（受付窓口＆手動スイッチを作る）
+
+まず、Pythonから送られてくる予定データを受け取ったり、手動で同期を開始したりするための「基地」をGoogle Apps Script (GAS)で作成します。
+
+1.  [Google Apps Script](https://script.google.com/home) にアクセスし、Googleアカウントでログインします。
+2.  「**新しいプロジェクト**」を作成します。
+3.  エディタが開いたら、最初から書かれているコードをすべて消し、`gas.gs`ファイルの中身を**すべてコピー＆ペースト**します。
+4.  プロジェクトに名前をつけ（例: `TimeTree Sync`）、フロッピーディスクのアイコン💾を押して保存します。
+5.  右上の青い「**デプロイ**」ボタンを押し、「**新しいデプロイ**」を選択します。
+6.  歯車⚙️アイコンの「種類の選択」で「**ウェブアプリ**」を選びます。
+7.  以下の設定を行います。
+    *   **説明**: (任意) `TimeTree Sync WebApp` など
+    *   **次のユーザーとして実行**: **自分**
+    *   **アクセスできるユーザー**: **全員**
+8.  「**デプロイ**」をクリックします。初回は、Googleカレンダーへのアクセス許可や外部URLへの接続許可などを求められるので、画面の指示に従って**すべて承認**してください。
+9.  デプロイが完了すると「**ウェブアプリ URL**」が表示されます。このURLは後で使うので、**必ずコピーしてメモ帳などに保存**しておきましょう。
+
+### ステップ2：GitHub側の準備（プログラムを設置する）
+
+次に、このツール一式をあなたのGitHubアカウントに設置します。
+
+1.  あなたのパソコンに、このプロジェクトのファイルをすべてダウンロード（または`git clone`）します。
+2.  あなたのGitHubアカウントで、**新しいリポジトリ**を作成します。（リポジトリ名は `timetree-sync` など分かりやすいものが良いでしょう）
+3.  ダウンロードしたプロジェクトのファイルを、作成した新しいリポジトリに**すべてアップロード（`git push`）**します。
+
+### ステップ3：GitHubの「秘密鍵」を作成する (Personal Access Token)
+
+GASがGitHub Actionsを安全に呼び出すための、特別な「秘密の合言葉」を作成します。
+
+1.  GitHubにログインし、右上の自分のアイコンをクリック → **Settings** を選択。
+2.  左側メニューを一番下までスクロールし、**< > Developer settings** を選択。
+3.  **Personal access tokens** → **Tokens (classic)** を選択。
+4.  **Generate new token** → **Generate new token (classic)** をクリック。
+5.  **Note**に、トークンの名前を入力します（例: `GAS for TimeTree Scraper`）。
+6.  **Expiration**（有効期限）を選択します。（セキュリティのため `30 days` や `90 days` が推奨されます）
+7.  **Select scopes**（権限の選択）で、**`repo`** にチェックを入れます。
+8.  一番下の **Generate token** ボタンをクリックします。
+9.  **（最重要）** 緑色の背景に表示されるトークン（`ghp_...`で始まる文字列）を、**必ずコピーして安全な場所に保存します。この画面を一度閉じると、二度と表示されません。**
+
+### ステップ4：秘密の情報を登録する
+
+パスワードなどの大切な情報を、安全にプログラムへ渡すための設定です。
+
+#### 4-1. GASに秘密の情報を登録する
+
+1.  ステップ1で作成したGASプロジェクトに戻り、左側メニューの歯車⚙️アイコン「**プロジェクトの設定**」をクリック。
+2.  「**スクリプト プロパティ**」セクションにある「**スクリプト プロパティを追加**」をクリック。
+3.  以下の情報を登録します。
+    *   **プロパティ**: `GITHUB_PAT`
+    *   **値**: ステップ3でコピーした**Personal Access Token**の文字列 (`ghp_...`)
+4.  「スクリプト プロパティを保存」をクリックします。
+
+#### 4-2. GitHubに秘密の情報を登録する
+
+1.  ステップ2で作成したあなたのGitHubリポジトリのページを開き、「**Settings**」タブ → 「**Secrets and variables**」 → 「**Actions**」に移動します。
+2.  「**New repository secret**」ボタンを押し、以下の**4つの秘密の情報**を一つずつ登録していきます。
+    *   **`TIMETREE_EMAIL`**: あなたのTimeTreeのログイン用メールアドレス
+    *   **`TIMETREE_PASSWORD`**: あなたのTimeTreeのログイン用パスワード
+    *   **`TIMETREE_CALENDAR_URL`**: 同期したいTimeTreeカレンダーのURL
+    *   **`GAS_WEBAPP_URL`**: ステップ1でコピーした**ウェブアプリ URL**
+
+### ステップ5：自動実行のスケジュールを設定する（お好みで）
+
+`./github/workflows/main.yml` ファイルを開くと、自動実行のスケジュールを設定する箇所があります。
+
+```yaml
+schedule:
+  - cron: "0 */1 * * *" # 1時間ごとに実行
 ```
 
-### 2. Google Apps Script (GAS) のデプロイ
+この `cron` の設定を変更することで、実行頻度を自由に変えられます。（例: `0 */3 * * *` なら3時間ごと）
+**注意**: 頻繁すぎる設定（10分ごとなど）は、アカウント停止のリスクやGitHubの無料枠を消費する可能性があるため、**1時間〜6時間ごと**を推奨します。
 
-1.  [Google Apps Script](https://script.google.com/home) にアクセスし、新しいプロジェクトを作成します。
-2.  `gas.gs` ファイルの内容をコピーし、GAS エディタに貼り付けます。
-3.  プロジェクトを保存し、右上の「デプロイ」>「新しいデプロイ」を選択します。
-4.  「種類の選択」で「ウェブアプリ」を選択します。
-5.  以下の設定を行います。
-    - **説明**: (任意) `TimeTree Sync` など
-    - **次のユーザーとして実行**: 自分
-    - **アクセスできるユーザー**: 全員
-6.  「デプロイ」をクリックします。初回デプロイ時には、カレンダーへのアクセス許可を求められるので承認してください。
-7.  表示された**ウェブアプリ URL** をコピーしておきます。これは後で使います。
+---
 
-### 3. Python 環境のセットアップ
+## 5. 使い方
 
-```bash
-# 仮想環境の作成
-python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS/Linux
-# source .venv/bin/activate
+*   **自動実行**: 上記の設定が完了していれば、あとは何もしなくてもGitHub Actionsが設定したスケジュール通りに自動で同期を実行してくれます。
+*   **手動実行**: 「今すぐ同期したい！」という時は、**ステップ1で作成したGASプロジェクト**を開きます。エディタ上部の関数選択メニューから `triggerGitHubActionsWorkflow` を選び、再生ボタン▶️を押すことで、いつでも手動で同期を開始できます。
 
-# 依存ライブラリのインストール
-pip install -r requirements.txt
+## 6. もしうまく動かない時は…？ 🛠️
 
-# Playwright のブラウザと依存関係をインストール
-playwright install --with-deps
-```
-
-### 4. 環境変数の設定
-
-`.env_sample` ファイルをコピーして `.env` という名前のファイルを作成します。
-
-```bash
-cp .env_sample .env
-```
-
-作成した `.env` ファイルを編集し、以下の情報を設定します。
-
-```dotenv
-TIMETREE_EMAIL=YOUR_TIMETREE_EMAIL
-TIMETREE_PASSWORD=YOUR_TIMETREE_PASSWORD
-TIMETREE_CALENDAR_URL=YOUR_TIMETREE_CALENDAR_URL
-GAS_WEBAPP_URL=YOUR_GAS_WEBAPP_URL
-```
-
-- `TIMETREE_EMAIL`: TimeTree のログインメールアドレス
-- `TIMETREE_PASSWORD`: TimeTree のログインパスワード
-- `TIMETREE_CALENDAR_URL`: 同期したい TimeTree カレンダーの URL
-- `GAS_WEBAPP_URL`: 手順2で取得した GAS のウェブアプリ URL
-
-### 5. GitHub Secrets の設定 (自動実行に必要)
-
-このリポジトリを GitHub にプッシュした後、Actions を正しく動作させるために、以下の情報をリポジトリの Secrets に登録する必要があります。
-
-1.  リポジトリの「Settings」>「Secrets and variables」>「Actions」に移動します。
-2.  「New repository secret」をクリックし、以下の4つの Secret を登録します。
-    - `TIMETREE_EMAIL`: TimeTree のログインメールアドレス
-    - `TIMETREE_PASSWORD`: TimeTree のログインパスワード
-    - `TIMETREE_CALENDAR_URL`: 同期したい TimeTree カレンダーの URL
-    - `GAS_WEBAPP_URL`: 手順2で取得した GAS のウェブアプリ URL
-
-## 使い方
-
-### 手動実行
-
-ローカル環境でセットアップが完了していれば、以下のコマンドでスクリプトを手動実行できます。
-
-```bash
-python timetree_scraper.py
-```
-
-### 自動実行
-
-`.github/workflows/main.yml` に定義されたスケジュール (`cron: "0 0 * * *"`、毎日UTCの0時) に基づいて、GitHub Actions が自動的にスクリプトを実行します。
-また、リポジトリの「Actions」タブから `workflow_dispatch` を使って手動でワークフローをトリガーすることも可能です。
-
-## 処理の流れ
-
-1.  **GitHub Actions**: スケジュールされた時刻になると、ワークフローが開始されます。
-2.  **`timetree_scraper.py`**:
-    - Playwright を起動し、環境変数に設定された認証情報を使って TimeTree にログインします。
-    - 環境変数 `TIMETREE_CALENDAR_URL` で指定されたカレンダーページから当月のイベント情報（タイトル、日付、時間）をスクレイピングします。
-3.  **POST to GAS**:
-    - 取得したイベント情報を JSON 形式にまとめ、環境変数 `GAS_WEBAPP_URL` に POST リクエストを送信します。
-4.  **`gas.gs` (ウェブアプリ)**:
-    - POST リクエストを受け取ります。
-    - JSON データを解析し、イベントごとに Google Calendar API を呼び出して、デフォルトカレンダーにイベントを作成します。
-    - 終日イベントと時間指定イベントの両方に対応しています。
-
-## ライセンス
-
-This project is licensed under the MIT License.
+*   **GitHub Actionsのログを確認**: 「Actions」タブの実行履歴から、エラーが出ていないか確認しましょう。赤い`X`マークがついていたら、ログにエラーの原因が書かれています。
+*   **GASの実行履歴を確認**: [Google Apps Script](https://script.google.com/home) の該当プロジェクトを開き、左側メニューの「実行数」から、エラーが出ていないか確認できます。
+*   **秘密の情報の再確認**: ステップ4で登録した情報に、打ち間違いやコピーミスがないか、もう一度確認してみてください。特にURLの最後のスラッシュ`/`などは要注意です。

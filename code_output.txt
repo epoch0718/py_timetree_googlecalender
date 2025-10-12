@@ -1,4 +1,5 @@
-
+以下のアプリを詳細に理解して、README.mdを作成してください。
+初心者向けに丁寧にお願いします
 
 
 ---
@@ -20,6 +21,9 @@ GAS_WEBAPP_URL=（GASのURL）
 - フォルダ名: .
 - ファイル名: gas.gs
 - 内容:
+// このスクリプトが管理するイベントであることを示すための「目印」
+const SYNC_TAG = '\u200B[TimeTree]\u200B'; // 見えない文字(ゼロ幅スペース)で囲んだタグ
+
 /**
  * 12時間表記(AM/PM)の時刻文字列をパースして、Dateオブジェクトを生成するヘルパー関数
  * @param {string} dateStr - "YYYY-MM-DD"形式の日付文字列
@@ -27,12 +31,15 @@ GAS_WEBAPP_URL=（GASのURL）
  * @returns {Date}
  */
 function parseDateTime(dateStr, timeStr) {
+  // この関数は変更なし
   const dateParts = dateStr.split('-');
   const year = parseInt(dateParts[0], 10);
-  const month = parseInt(dateParts[1], 10) - 1; // 月は0-indexed
+  const month = parseInt(dateParts[1], 10) - 1;
   const day = parseInt(dateParts[2], 10);
 
   const timeMatch = timeStr.match(/(\d+):(\d+)\s(AM|PM)/);
+  if (!timeMatch) return null; // 不正な形式の場合はnullを返す
+
   let hour = parseInt(timeMatch[1], 10);
   const minute = parseInt(timeMatch[2], 10);
   const ampm = timeMatch[3];
@@ -40,7 +47,7 @@ function parseDateTime(dateStr, timeStr) {
   if (ampm === 'PM' && hour < 12) {
     hour += 12;
   }
-  if (ampm === 'AM' && hour === 12) { // 深夜12時(12:00 AM)のケース
+  if (ampm === 'AM' && hour === 12) {
     hour = 0;
   }
 
@@ -48,61 +55,178 @@ function parseDateTime(dateStr, timeStr) {
 }
 
 /**
+ * イベントのユニークなキーを生成する関数
+ * @param {string} title - イベントのタイトル
+ * @param {string} dateStr - "YYYY-MM-DD"形式の日付文字列
+ * @returns {string} - "タイトル-YYYY-MM-DD" 形式のキー
+ */
+function createEventKey(title, dateStr) {
+  return `${title}-${dateStr}`;
+}
+
+/**
  * WebアプリとしてPOSTリクエストを受け取ったときに実行されるメイン関数
  * @param {Object} e - POSTリクエストのイベントオブジェクト
  */
 function doPost(e) {
-  const logs = []; // Pythonに返すためのログ収集用配列
+  const logs = [];
   let statusMessage = "";
-
+  let createdCount = 0;
+  let updatedCount = 0;
+  let deletedCount = 0;
+  
   try {
-    const events = JSON.parse(e.postData.contents);
+    const timetreeEvents = JSON.parse(e.postData.contents);
     const calendar = CalendarApp.getDefaultCalendar();
     
-    logs.push(`Received ${events.length} events to process.`);
+    logs.push(`Received ${timetreeEvents.length} events to process from TimeTree.`);
+    if (timetreeEvents.length === 0) {
+      logs.push("No events to process. Sync finished.");
+      return ContentService.createTextOutput(JSON.stringify({ status: "No events received.", logs: logs })).setMimeType(ContentService.MimeType.JSON);
+    }
 
-    events.forEach(eventData => {
-      const title = eventData.title;
-      const dateStr = eventData.date;
-      const timeStr = eventData.time;
+    // --- 1. 既存の同期済みイベントの名簿を作成 ---
+    const firstEventDate = new Date(timetreeEvents[0].date);
+    const year = firstEventDate.getFullYear();
+    const month = firstEventDate.getMonth();
+    const firstDayOfMonth = new Date(year, month, 1);
+    const lastDayOfMonth = new Date(year, month + 1, 0, 23, 59, 59);
 
-      logs.push(`Processing: '${title}' on ${dateStr} at ${timeStr || 'All-day'}`);
+    const existingEvents = calendar.getEvents(firstDayOfMonth, lastDayOfMonth)
+      .filter(event => {
+        try {
+          return event.getDescription().includes(SYNC_TAG);
+        } catch (err) {
+          return false;
+        }
+      });
+      
+    // 高速で検索できるように、既存イベントをMapに変換する
+    const googleEventsMap = new Map();
+    existingEvents.forEach(event => {
+      const key = createEventKey(event.getTitle(), Utilities.formatDate(event.getStartTime(), Session.getScriptTimeZone(), "yyyy-MM-dd"));
+      googleEventsMap.set(key, event);
+    });
+    logs.push(`Found ${googleEventsMap.size} existing synced events in Google Calendar for ${year}-${month + 1}.`);
 
-      if (timeStr) {
-        // 時間指定イベント
-        const startTime = parseDateTime(dateStr, timeStr);
-        const endTime = new Date(startTime.getTime() + (60 * 60 * 1000)); // 仮に1時間後
+    // --- 2. TimeTreeの予定を名簿と照合し、更新または新規作成 ---
+    timetreeEvents.forEach(ttEvent => {
+      const key = createEventKey(ttEvent.title, ttEvent.date);
+      const options = { description: SYNC_TAG + "\n" + (ttEvent.memo || "") };
+
+      if (googleEventsMap.has(key)) {
+        // **【更新処理】** 既存の予定が見つかった場合
+        const existingEvent = googleEventsMap.get(key);
+        let needsUpdate = false;
+
+        // メモの比較と更新
+        if (existingEvent.getDescription() !== options.description) {
+          existingEvent.setDescription(options.description);
+          needsUpdate = true;
+        }
+
+        // 時間の比較と更新
+        if (ttEvent.time) { // 時間指定イベントの場合
+          const newStartTime = parseDateTime(ttEvent.date, ttEvent.time);
+          const newEndTime = new Date(newStartTime.getTime() + (60 * 60 * 1000));
+          if (existingEvent.getStartTime().getTime() !== newStartTime.getTime() || existingEvent.getEndTime().getTime() !== newEndTime.getTime()) {
+            existingEvent.setTime(newStartTime, newEndTime);
+            needsUpdate = true;
+          }
+        }
         
-        logs.push(` -> Creating timed event. Start: ${startTime}, End: ${endTime}`);
-        calendar.createEvent(title, startTime, endTime);
+        if (needsUpdate) {
+          logs.push(`Updating event: '${ttEvent.title}'`);
+          updatedCount++;
+        }
         
+        googleEventsMap.delete(key); // 処理済みとして名簿から削除
+
       } else {
-        // 終日イベント
-        const eventDate = new Date(dateStr);
-        // タイムゾーン問題を避けるため、UTCで日付を扱う
-        const utcDate = new Date(eventDate.getUTCFullYear(), eventDate.getUTCMonth(), eventDate.getUTCDate());
-
-        logs.push(` -> Creating all-day event on: ${utcDate}`);
-        calendar.createAllDayEvent(title, utcDate);
+        // **【新規作成処理】** 既存の予定が見つからなかった場合
+        logs.push(`Creating new event: '${ttEvent.title}'`);
+        if (ttEvent.time) {
+          const startTime = parseDateTime(ttEvent.date, ttEvent.time);
+          const endTime = new Date(startTime.getTime() + (60 * 60 * 1000));
+          calendar.createEvent(ttEvent.title, startTime, endTime, options);
+        } else {
+          const eventDate = new Date(ttEvent.date);
+          const utcDate = new Date(eventDate.getUTCFullYear(), eventDate.getUTCMonth(), eventDate.getUTCDate());
+          calendar.createAllDayEvent(ttEvent.title, utcDate, options);
+        }
+        createdCount++;
       }
     });
-    
-    statusMessage = "Successfully processed " + events.length + " events.";
+
+    // --- 3. 名簿に残り、不要になった予定を削除 ---
+    if (googleEventsMap.size > 0) {
+      logs.push(`Deleting ${googleEventsMap.size} events that no longer exist in TimeTree.`);
+      googleEventsMap.forEach(eventToDelete => {
+        logs.push(` - Deleting: '${eventToDelete.getTitle()}'`);
+        eventToDelete.deleteEvent();
+        deletedCount++;
+      });
+    }
+
+    statusMessage = `Sync complete. Created: ${createdCount}, Updated: ${updatedCount}, Deleted: ${deletedCount}.`;
     logs.push(statusMessage);
-    
+
   } catch (error) {
     statusMessage = "Error processing request: " + error.toString();
-    logs.push(statusMessage);
-    logs.push("Received data: " + e.postData.contents);
+    logs.push(statusMessage, error.stack);
+    logs.push("Received data: " + (e ? e.postData.contents : "N/A"));
   }
   
-  // 処理結果のステータスと、収集したログをまとめてJSONで返す
   return ContentService
-    .createTextOutput(JSON.stringify({ 
-        status: statusMessage,
-        logs: logs 
-    }))
+    .createTextOutput(JSON.stringify({ status: statusMessage, logs: logs }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+
+/**
+ * GitHub Actionsのワークフローを起動します。
+ */
+function triggerGitHubActionsWorkflow() {
+  // --- ▼ あなたの情報に合わせて変更してください ▼ ---
+  const GITHUB_OWNER = 'epoch0718'; // あなたのGitHubユーザー名
+  const GITHUB_REPO = 'py_timetree_googlecalender'; // リポジトリ名
+  const WORKFLOW_FILE_NAME = 'main.yml';      // ワークフローのファイル名
+  const GIT_BRANCH = 'main';                  // 対象のブランチ名
+  // --- ▲ 設定ここまで ▲ ---
+
+  // スクリプトプロパティから安全にPATを取得
+  const GITHUB_PAT = PropertiesService.getScriptProperties().getProperty('GITHUB_PAT');
+  
+  if (!GITHUB_PAT) {
+    Logger.log('エラー: スクリプトプロパティに GITHUB_PAT が設定されていません。');
+    return;
+  }
+
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/workflows/${WORKFLOW_FILE_NAME}/dispatches`;
+
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    headers: {
+      'Accept': 'application/vnd.github.v3+json',
+      'Authorization': `token ${GITHUB_PAT}`
+    },
+    payload: JSON.stringify({
+      'ref': GIT_BRANCH
+    })
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(url, options);
+    // レスポンスコード204は成功を意味する
+    if (response.getResponseCode() === 204) {
+      Logger.log('GitHub Actionsワークフローの起動に成功しました。');
+    } else {
+      Logger.log(`ワークフローの起動に失敗しました。ステータスコード: ${response.getResponseCode()}, レスポンス: ${response.getContentText()}`);
+    }
+  } catch (e) {
+    Logger.log(`エラーが発生しました: ${e.toString()}`);
+  }
 }
 
 
@@ -112,126 +236,6 @@ function doPost(e) {
 - フォルダ名: .
 - ファイル名: README.md
 - 内容:
-# TimeTree to Google Calendar Scraper
-
-## 概要
-
-このプロジェクトは、[TimeTree](https://timetreeapp.com/) のカレンダーから予定を自動的にスクレイピングし、指定した Google Calendar に同期するためのツールです。
-Playwright を使用して TimeTree から情報を取得し、Google Apps Script (GAS) を介して Google Calendar にイベントを登録します。
-一連の処理は GitHub Actions によって定期的に自動実行されます。
-
-## 主な機能
-
-- **TimeTree スクレイピング**: Playwright を利用して、TimeTree のウェブサイトにログインし、カレンダーのイベント情報を取得します。
-- **Google Calendar 同期**: 取得したイベント情報を Google Apps Script で作成したウェブアプリに送信し、Google Calendar にイベントとして登録します。
-- **自動化**: GitHub Actions を使用して、毎日定刻にスクレイピングと同期処理を自動で実行します。
-
-## 必要なもの
-
-- TimeTree アカウント
-- Google アカウント
-- Python 3.11 以降
-
-## セットアップ手順
-
-### 1. リポジトリのクローン
-
-```bash
-git clone https://github.com/your-username/py_timetree_scraper.git
-cd py_timetree_scraper
-```
-
-### 2. Google Apps Script (GAS) のデプロイ
-
-1.  [Google Apps Script](https://script.google.com/home) にアクセスし、新しいプロジェクトを作成します。
-2.  `gas.gs` ファイルの内容をコピーし、GAS エディタに貼り付けます。
-3.  プロジェクトを保存し、右上の「デプロイ」>「新しいデプロイ」を選択します。
-4.  「種類の選択」で「ウェブアプリ」を選択します。
-5.  以下の設定を行います。
-    - **説明**: (任意) `TimeTree Sync` など
-    - **次のユーザーとして実行**: 自分
-    - **アクセスできるユーザー**: 全員
-6.  「デプロイ」をクリックします。初回デプロイ時には、カレンダーへのアクセス許可を求められるので承認してください。
-7.  表示された**ウェブアプリ URL** をコピーしておきます。これは後で使います。
-
-### 3. Python 環境のセットアップ
-
-```bash
-# 仮想環境の作成
-python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS/Linux
-# source .venv/bin/activate
-
-# 依存ライブラリのインストール
-pip install -r requirements.txt
-
-# Playwright のブラウザと依存関係をインストール
-playwright install --with-deps
-```
-
-### 4. 環境変数の設定
-
-`.env_sample` ファイルをコピーして `.env` という名前のファイルを作成します。
-
-```bash
-cp .env_sample .env
-```
-
-作成した `.env` ファイルを編集し、以下の情報を設定します。
-
-```dotenv
-TIMETREE_EMAIL=YOUR_TIMETREE_EMAIL
-TIMETREE_PASSWORD=YOUR_TIMETREE_PASSWORD
-GAS_WEBAPP_URL=YOUR_GAS_WEBAPP_URL
-```
-
-- `TIMETREE_EMAIL`: TimeTree のログインメールアドレス
-- `TIMETREE_PASSWORD`: TimeTree のログインパスワード
-- `GAS_WEBAPP_URL`: 手順2で取得した GAS のウェブアプリ URL
-
-### 5. GitHub Secrets の設定 (自動実行に必要)
-
-このリポジトリを GitHub にプッシュした後、Actions を正しく動作させるために、以下の情報をリポジトリの Secrets に登録する必要があります。
-
-1.  リポジトリの「Settings」>「Secrets and variables」>「Actions」に移動します。
-2.  「New repository secret」をクリックし、以下の3つの Secret を登録します。
-    - `TIMETREE_EMAIL`: TimeTree のログインメールアドレス
-    - `TIMETREE_PASSWORD`: TimeTree のログインパスワード
-    - `GAS_WEBAPP_URL`: 手順2で取得した GAS のウェブアプリ URL
-
-## 使い方
-
-### 手動実行
-
-ローカル環境でセットアップが完了していれば、以下のコマンドでスクリプトを手動実行できます。
-
-```bash
-python timetree_scraper.py
-```
-
-### 自動実行
-
-`.github/workflows/main.yml` に定義されたスケジュール (`cron: "0 0 * * *"`、毎日UTCの0時) に基づいて、GitHub Actions が自動的にスクリプトを実行します。
-また、リポジトリの「Actions」タブから `workflow_dispatch` を使って手動でワークフローをトリガーすることも可能です。
-
-## 処理の流れ
-
-1.  **GitHub Actions**: スケジュールされた時刻になると、ワークフローが開始されます。
-2.  **`timetree_scraper.py`**:
-    - Playwright を起動し、環境変数に設定された認証情報を使って TimeTree にログインします。
-    - カレンダーページから当月のイベント情報（タイトル、日付、時間）をスクレイピングします。
-3.  **POST to GAS**:
-    - 取得したイベント情報を JSON 形式にまとめ、環境変数 `GAS_WEBAPP_URL` に POST リクエストを送信します。
-4.  **`gas.gs` (ウェブアプリ)**:
-    - POST リクエストを受け取ります。
-    - JSON データを解析し、イベントごとに Google Calendar API を呼び出して、デフォルトカレンダーにイベントを作成します。
-    - 終日イベントと時間指定イベントの両方に対応しています。
-
-## ライセンス
-
-This project is licensed under the MIT License.
 
 
 
@@ -255,88 +259,175 @@ requests
 - 内容:
 import os
 import json
-import requests # 追加
+import requests
 from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
 import re
 
-# 既存のロジックは変更なし
 load_dotenv()
 TIMETREE_EMAIL = os.getenv("TIMETREE_EMAIL")
 TIMETREE_PASSWORD = os.getenv("TIMETREE_PASSWORD")
 CALENDAR_URL = os.getenv("TIMETREE_CALENDAR_URL")
-GAS_WEBAPP_URL = os.getenv("GAS_WEBAPP_URL") # 追加
+GAS_WEBAPP_URL = os.getenv("GAS_WEBAPP_URL")
 
-# 既存のスクレイピング関数は変更なし
-def get_events_with_playwright_logic(page):
+def get_events_by_bounding_box(page):
     """
-    Playwrightの標準的なAPIを使用して、カレンダーのイベント情報を取得します。
+    要素の画面上の座標（Bounding Box）を基準に、日付とイベントを紐付ける最終ロジック。
     """
     events = []
     month_year = page.locator('time').get_attribute('datetime')
+
+    # 1. 全ての日付セルの日付と座標を取得
+    date_boxes = []
+    gridcells = page.locator('[role="gridcell"]').all()
+    for cell in gridcells:
+        # セル内の日付番号要素を取得 (div > div 構造を仮定)
+        day_element = cell.locator('div > div')
+        if day_element.count() > 0:
+            day = day_element.inner_text()
+            if day.isdigit():
+                box = cell.bounding_box()
+                if box:
+                    date_boxes.append({'day': day, 'box': box})
+
+    if not date_boxes:
+        print("Error: Could not find or measure date cells.")
+        return []
+    
+    print(f"Found and measured {len(date_boxes)} date cells.")
+
+    # 2. 全てのイベントのタイトル、時間、座標を取得
+    event_details = []
     event_elements = page.locator('.lndlxo5').all()
-    for event_element in event_elements:
-        style = event_element.get_attribute('style')
-        if not style:
+
+
+    for i,event_element in enumerate(event_elements):
+        box = event_element.bounding_box()
+        if not box:
             continue
-        day_of_month_match = re.search(r'--lndlxo3: (\d+)', style)
-        if not day_of_month_match:
-            continue
-        day_of_month = int(day_of_month_match.group(1))
+        
         button = event_element.locator('button')
         if button.count() > 0:
             title_element = button.locator('.lndlxo9')
             time_element = button.locator('._1r1c5vla')
+            
+            title = ""
             if title_element.count() > 0:
                 title = title_element.inner_text()
             else:
-                title = button.inner_text()
-            if time_element.count() > 0:
-                time = time_element.inner_text()
+                full_text = button.inner_text()
+                time_text = time_element.inner_text() if time_element.count() > 0 else ""
+                title = full_text.replace(time_text, "").strip()
+                print(full_text + " " + time_text + " " + title)
+                print('full_text + " " + time_text + " " + title')
+
+            time = time_element.inner_text() if time_element.count() > 0 else None
+
+            button.click()
+            page.wait_for_timeout(500)
+            memo=None
+            memo = page.locator('p.exlc7u1.vjrcbi0')
+            if memo.count() >0:
+                if memo.inner_text().find('Locator') == -1:
+                    memo = memo.inner_text()
+                    print(memo)
             else:
-                time = None
-            event = {
-                'date': f"{month_year}-{str(day_of_month).zfill(2)}",
-                'time': time,
-                'title': title.strip()
-            }
-            events.append(event)
+                memo = None
+
+            if title != "" and time != None:
+                event_details.append({
+                    'title': title.strip(),
+                    'time': time,
+                    'box': box,
+                    'memo': memo
+                })
+            closebotton = page.get_by_label("Close")
+            if closebotton.count() > 0:
+                closebotton.click()
+                page.wait_for_timeout(500)
+
+
+    if not event_details:
+        print("Warning: Found date cells, but no event elements.")
+        return []
+        
+    print(f"Found and measured {len(event_details)} events.")
+
+    # 3. イベントの座標がどの日付セルの範囲内にあるかを判定して紐付け
+    for event_detail in event_details:
+        event_box = event_detail['box']
+        # イベントの中心点がどのセルに入るかで判定
+        event_center_x = event_box['x'] + event_box['width'] / 2
+        event_center_y = event_box['y'] + event_box['height'] / 2
+
+        for date_info in date_boxes:
+            date_box = date_info['box']
+            if (date_box['x'] <= event_center_x < date_box['x'] + date_box['width'] and
+                date_box['y'] <= event_center_y < date_box['y'] + date_box['height']):
+                
+                event = {
+                    'date': f"{month_year}-{str(date_info['day']).zfill(2)}",
+                    'time': event_detail['time'],
+                    'title': event_detail['title'],
+                    'memo': event_detail['memo']
+                }
+                if event not in events:
+                    events.append(event)
+                break # マッチしたら次のイベントへ
+    
     return events
 
 def main():
     with sync_playwright() as p:
-        # 修正: GitHub Actionsで実行するためにheadless=Trueに変更
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--force-device-scale-factor=1.1"]
+            )
+        
+        # 日本のタイムゾーン（Asia/Tokyo）を指定して、新しいブラウザコンテキストを作成
+        context = browser.new_context(
+            timezone_id="Asia/Tokyo"
+        )
         page = browser.new_page()
 
-        # 既存のログイン処理は変更なし
+        print("Navigating to calendar and logging in...")
         page.goto(CALENDAR_URL, wait_until="networkidle")
-        page.fill('input[type="email"]', TIMETREE_EMAIL)
-        page.fill('input[type="password"]', TIMETREE_PASSWORD)
-        page.click('button[type="submit"]')
-        page.wait_for_timeout(5000)
+        
+        if "signin" in page.url:
+            print("Login page detected. Logging in...")
+            page.fill('input[type="email"]', TIMETREE_EMAIL)
+            page.fill('input[type="password"]', TIMETREE_PASSWORD)
+            page.click('button[type="submit"]')
+        
+        print("Waiting for calendar to load...")
         page.wait_for_selector('[data-test-id="calendar-main"]')
+        page.wait_for_timeout(5000)
+        print("Calendar loaded.")
 
-        # 既存のスクレイピング呼び出しは変更なし
-        events = get_events_with_playwright_logic(page)
+        # 新しいスクレイピング関数を呼び出す
+        events = get_events_by_bounding_box(page)
+        
 
-        print("--- Scraped Events ---")
-        print(json.dumps(events, indent=2, ensure_ascii=False))
+        print("\n--- Scraped Events ---")
+        # 日付順にソートして表示
+        sorted_events = sorted(events, key=lambda x: (x['date'], x['time'] or ''))
+        print(json.dumps(sorted_events, indent=2, ensure_ascii=False))
 
-        # --- ここから追加したロジック ---
-        if GAS_WEBAPP_URL:
+        if not events:
+            print("\nWarning: No events were scraped. Skipping sending data to GAS.")
+        elif GAS_WEBAPP_URL:
             print("\n--- Sending data to Google Apps Script ---")
             try:
                 headers = {'Content-Type': 'application/json'}
-                response = requests.post(GAS_WEBAPP_URL, data=json.dumps(events), headers=headers)
-                response.raise_for_status()  # ステータスコードが200番台でなければ例外を発生
+                # ソートした結果を送信
+                response = requests.post(GAS_WEBAPP_URL, data=json.dumps(sorted_events), headers=headers)
+                response.raise_for_status()
                 print(f"Successfully sent data. Status: {response.status_code}")
                 print(f"Response from GAS: {response.text}")
             except requests.exceptions.RequestException as e:
                 print(f"Error sending data to GAS: {e}")
         else:
             print("\nGAS_WEBAPP_URL is not set. Skipping sending data to GAS.")
-        # --- ここまで追加したロジック ---
 
         browser.close()
 
@@ -361,7 +452,7 @@ on:
   # 日本時間の午前9時に相当します。時間は自由に変更してください。
   # 例: 日本時間の午前7時にしたい場合 -> cron: "0 22 * * *"
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "0 */1 * * *"
   
   # GitHubのActionsタブから手動で実行することも可能にする
   workflow_dispatch:
@@ -376,29 +467,39 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Python環境をセットアップ
+      # 2. Python環境をセットアップ (pipキャッシュを有効化)
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11' # 使用するPythonのバージョン
+          python-version: '3.11'
+          cache: 'pip' # requirements.txt に基づいてpipの依存関係をキャッシュ
 
-      # 3. Pythonの依存ライブラリをインストール
-      # (requirements.txt ファイルをリポジトリのルートに作成する必要があります)
+      # 3. Pythonの依存ライブラリをインストール (キャッシュがあれば高速化)
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       
-      # 4. PlaywrightのブラウザとOS依存関係をインストール
+      # 4. Playwrightのブラウザをキャッシュ
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      # 5. PlaywrightのブラウザとOS依存関係をインストール (キャッシュがあれば高速化)
       - name: Install Playwright browsers
         run: playwright install --with-deps
 
-      # 5. Pythonスクリプトを実行
+      # 6. Pythonスクリプトを実行
       # GitHub Secretsから認証情報を環境変数としてスクリプトに渡す
       - name: Run scraper script
         env:
           TIMETREE_EMAIL: ${{ secrets.TIMETREE_EMAIL }}
           TIMETREE_PASSWORD: ${{ secrets.TIMETREE_PASSWORD }}
+          TIMETREE_CALENDAR_URL: ${{ secrets.TIMETREE_CALENDAR_URL }}
           GAS_WEBAPP_URL: ${{ secrets.GAS_WEBAPP_URL }}
         run: python timetree_scraper.py
 

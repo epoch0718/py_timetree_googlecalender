@@ -64,6 +64,9 @@ def get_events_by_bounding_box(page):
 
             time = time_element.inner_text() if time_element.count() > 0 else None
 
+            print(time)
+            print('time\n')
+
             button.click()
             page.wait_for_timeout(500)
             memo=None
@@ -94,6 +97,9 @@ def get_events_by_bounding_box(page):
         
     print(f"Found and measured {len(event_details)} events.")
 
+    print(event_details)
+    print('event_details_1')
+
     # 3. イベントの座標がどの日付セルの範囲内にあるかを判定して紐付け
     for event_detail in event_details:
         event_box = event_detail['box']
@@ -115,6 +121,9 @@ def get_events_by_bounding_box(page):
                 if event not in events:
                     events.append(event)
                 break # マッチしたら次のイベントへ
+    
+    print(events)
+    print('events_2')
     
     return events
 
