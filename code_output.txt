@@ -1,5 +1,4 @@
-以下のアプリを詳細に理解して、README.mdを作成してください。
-初心者向けに丁寧にお願いします
+新規データをいれてないのに、Pythonを実行すると、googleカレンダーのデータが更新されず、同じものが増えていく
 
 
 ---
@@ -236,7 +235,145 @@ function triggerGitHubActionsWorkflow() {
 - フォルダ名: .
 - ファイル名: README.md
 - 内容:
+はい、承知いたしました。
+`GAS`から`GitHub Actions`を起動する際に必要な`GITHUB_PAT`の登録手順も含めて、初心者の方にもさらに分かりやすくなるように全体を再構成し、README.mdを再出力します。
 
+---
+
+# TimeTree to Google Calendar Sync Tool 🤖
+
+## 1. このツールで何ができるの？ 🤔
+
+このツールは、**TimeTreeカレンダーに入力した予定を、自動的にあなたのGoogleカレンダーにコピー（同期）してくれる**便利なプログラムです。
+
+一度設定してしまえば、あとはプログラムが定期的にTimeTreeをチェックし、Googleカレンダーを最新の状態に保ってくれます。これにより、以下のようなことが可能になります。
+
+*   TimeTreeの予定を、Googleカレンダーと連携する他のサービス（例: Notion）で使えるようになります。
+*   家族や友人とはTimeTreeで、個人の予定管理はGoogleカレンダーで、という使い分けがスムーズになります。
+
+<br>
+
+## 2. どんな仕組みで動いているの？ ⚙️
+
+このツールは、3つの部品が連携して動作します。
+
+1.  **Pythonスクリプト ( `timetree_scraper.py` )**
+    *   あなたの代わりにTimeTreeのウェブサイトにログインし、カレンダーの予定（タイトル、日時、メモ）を読み取ります。ブラウザを自動で操作する「Playwright」という技術を使っています。
+
+2.  **Google Apps Script ( `gas.gs` )**
+    *   Pythonから受け取った予定のデータを使って、あなたのGoogleカレンダーに予定を書き込みます。一度書き込んだ予定は、TimeTree側で変更・削除されると、それに合わせてGoogleカレンダー側も自動で更新・削除される賢い仕組み（差分同期）になっています。
+    *   また、「今すぐ同期したい！」という時のために、GitHub Actionsを呼び出すスイッチの役割も持っています。
+
+3.  **GitHub Actions ( `.github/workflows/main.yml` )**
+    *   この仕組み全体を、あなたが寝ている間も自動で動かし続けてくれる縁の下の力持ちです。設定した時間になると、自動的にPythonスクリプトを起動してくれます。
+
+<br>
+
+## 3. 必要なものリスト ✅
+
+このツールを使うには、いくつかのアカウントや情報が必要です。
+
+*   **TimeTreeのアカウント**
+    *   ログイン用のメールアドレスとパスワード
+    *   同期したいカレンダーのURL
+*   **Googleのアカウント**
+    *   同期先のGoogleカレンダー
+*   **GitHubのアカウント**
+    *   プログラムを設置し、自動実行させるための場所
+*   **Pythonが動くパソコン**
+    *   最初のセットアップや、手動でテストする時に使います。
+
+---
+
+## 4. セットアップ手順（使い方） 🚀
+
+少し手順が多いですが、一つずつ丁寧に進めれば大丈夫です！
+
+### ステップ1：Google側の準備（受付窓口＆手動スイッチを作る）
+
+まず、Pythonから送られてくる予定データを受け取ったり、手動で同期を開始したりするための「基地」をGoogle Apps Script (GAS)で作成します。
+
+1.  [Google Apps Script](https://script.google.com/home) にアクセスし、Googleアカウントでログインします。
+2.  「**新しいプロジェクト**」を作成します。
+3.  エディタが開いたら、最初から書かれているコードをすべて消し、`gas.gs`ファイルの中身を**すべてコピー＆ペースト**します。
+4.  プロジェクトに名前をつけ（例: `TimeTree Sync`）、フロッピーディスクのアイコン💾を押して保存します。
+5.  右上の青い「**デプロイ**」ボタンを押し、「**新しいデプロイ**」を選択します。
+6.  歯車⚙️アイコンの「種類の選択」で「**ウェブアプリ**」を選びます。
+7.  以下の設定を行います。
+    *   **説明**: (任意) `TimeTree Sync WebApp` など
+    *   **次のユーザーとして実行**: **自分**
+    *   **アクセスできるユーザー**: **全員**
+8.  「**デプロイ**」をクリックします。初回は、Googleカレンダーへのアクセス許可や外部URLへの接続許可などを求められるので、画面の指示に従って**すべて承認**してください。
+9.  デプロイが完了すると「**ウェブアプリ URL**」が表示されます。このURLは後で使うので、**必ずコピーしてメモ帳などに保存**しておきましょう。
+
+### ステップ2：GitHub側の準備（プログラムを設置する）
+
+次に、このツール一式をあなたのGitHubアカウントに設置します。
+
+1.  あなたのパソコンに、このプロジェクトのファイルをすべてダウンロード（または`git clone`）します。
+2.  あなたのGitHubアカウントで、**新しいリポジトリ**を作成します。（リポジトリ名は `timetree-sync` など分かりやすいものが良いでしょう）
+3.  ダウンロードしたプロジェクトのファイルを、作成した新しいリポジトリに**すべてアップロード（`git push`）**します。
+
+### ステップ3：GitHubの「秘密鍵」を作成する (Personal Access Token)
+
+GASがGitHub Actionsを安全に呼び出すための、特別な「秘密の合言葉」を作成します。
+
+1.  GitHubにログインし、右上の自分のアイコンをクリック → **Settings** を選択。
+2.  左側メニューを一番下までスクロールし、**< > Developer settings** を選択。
+3.  **Personal access tokens** → **Tokens (classic)** を選択。
+4.  **Generate new token** → **Generate new token (classic)** をクリック。
+5.  **Note**に、トークンの名前を入力します（例: `GAS for TimeTree Scraper`）。
+6.  **Expiration**（有効期限）を選択します。（セキュリティのため `30 days` や `90 days` が推奨されます）
+7.  **Select scopes**（権限の選択）で、**`repo`** にチェックを入れます。
+8.  一番下の **Generate token** ボタンをクリックします。
+9.  **（最重要）** 緑色の背景に表示されるトークン（`ghp_...`で始まる文字列）を、**必ずコピーして安全な場所に保存します。この画面を一度閉じると、二度と表示されません。**
+
+### ステップ4：秘密の情報を登録する
+
+パスワードなどの大切な情報を、安全にプログラムへ渡すための設定です。
+
+#### 4-1. GASに秘密の情報を登録する
+
+1.  ステップ1で作成したGASプロジェクトに戻り、左側メニューの歯車⚙️アイコン「**プロジェクトの設定**」をクリック。
+2.  「**スクリプト プロパティ**」セクションにある「**スクリプト プロパティを追加**」をクリック。
+3.  以下の情報を登録します。
+    *   **プロパティ**: `GITHUB_PAT`
+    *   **値**: ステップ3でコピーした**Personal Access Token**の文字列 (`ghp_...`)
+4.  「スクリプト プロパティを保存」をクリックします。
+
+#### 4-2. GitHubに秘密の情報を登録する
+
+1.  ステップ2で作成したあなたのGitHubリポジトリのページを開き、「**Settings**」タブ → 「**Secrets and variables**」 → 「**Actions**」に移動します。
+2.  「**New repository secret**」ボタンを押し、以下の**4つの秘密の情報**を一つずつ登録していきます。
+    *   **`TIMETREE_EMAIL`**: あなたのTimeTreeのログイン用メールアドレス
+    *   **`TIMETREE_PASSWORD`**: あなたのTimeTreeのログイン用パスワード
+    *   **`TIMETREE_CALENDAR_URL`**: 同期したいTimeTreeカレンダーのURL
+    *   **`GAS_WEBAPP_URL`**: ステップ1でコピーした**ウェブアプリ URL**
+
+### ステップ5：自動実行のスケジュールを設定する（お好みで）
+
+`./github/workflows/main.yml` ファイルを開くと、自動実行のスケジュールを設定する箇所があります。
+
+```yaml
+schedule:
+  - cron: "0 */1 * * *" # 1時間ごとに実行
+```
+
+この `cron` の設定を変更することで、実行頻度を自由に変えられます。（例: `0 */3 * * *` なら3時間ごと）
+**注意**: 頻繁すぎる設定（10分ごとなど）は、アカウント停止のリスクやGitHubの無料枠を消費する可能性があるため、**1時間〜6時間ごと**を推奨します。
+
+---
+
+## 5. 使い方
+
+*   **自動実行**: 上記の設定が完了していれば、あとは何もしなくてもGitHub Actionsが設定したスケジュール通りに自動で同期を実行してくれます。
+*   **手動実行**: 「今すぐ同期したい！」という時は、**ステップ1で作成したGASプロジェクト**を開きます。エディタ上部の関数選択メニューから `triggerGitHubActionsWorkflow` を選び、再生ボタン▶️を押すことで、いつでも手動で同期を開始できます。
+
+## 6. もしうまく動かない時は…？ 🛠️
+
+*   **GitHub Actionsのログを確認**: 「Actions」タブの実行履歴から、エラーが出ていないか確認しましょう。赤い`X`マークがついていたら、ログにエラーの原因が書かれています。
+*   **GASの実行履歴を確認**: [Google Apps Script](https://script.google.com/home) の該当プロジェクトを開き、左側メニューの「実行数」から、エラーが出ていないか確認できます。
+*   **秘密の情報の再確認**: ステップ4で登録した情報に、打ち間違いやコピーミスがないか、もう一度確認してみてください。特にURLの最後のスラッシュ`/`などは要注意です。
 
 
 ---
@@ -245,7 +382,7 @@ function triggerGitHubActionsWorkflow() {
 - フォルダ名: .
 - ファイル名: requirements.txt
 - 内容:
-playwright
+playwright==1.55.0
 python-dotenv
 requests
 
@@ -323,6 +460,9 @@ def get_events_by_bounding_box(page):
 
             time = time_element.inner_text() if time_element.count() > 0 else None
 
+            print(time)
+            print('time\n')
+
             button.click()
             page.wait_for_timeout(500)
             memo=None
@@ -353,6 +493,9 @@ def get_events_by_bounding_box(page):
         
     print(f"Found and measured {len(event_details)} events.")
 
+    print(event_details)
+    print('event_details_1')
+
     # 3. イベントの座標がどの日付セルの範囲内にあるかを判定して紐付け
     for event_detail in event_details:
         event_box = event_detail['box']
@@ -374,6 +517,9 @@ def get_events_by_bounding_box(page):
                 if event not in events:
                     events.append(event)
                 break # マッチしたら次のイベントへ
+    
+    print(events)
+    print('events_2')
     
     return events
 
@@ -441,60 +587,67 @@ if __name__ == "__main__":
 - フォルダ名: ./.github/workflows
 - ファイル名: main.yml
 - 内容:
-
 # GitHub Actionsワークフローファイル
 # ファイル名: .github/workflows/main.yml
 
-name: Scrape TimeTree and Update Google Calendar
+name: Scrape TimeTree and Update G-Calendar
 
 on:
-  # 毎日午前0時 (UTC) に自動実行
-  # 日本時間の午前9時に相当します。時間は自由に変更してください。
-  # 例: 日本時間の午前7時にしたい場合 -> cron: "0 22 * * *"
   schedule:
     - cron: "0 */1 * * *"
-  
-  # GitHubのActionsタブから手動で実行することも可能にする
   workflow_dispatch:
 
 jobs:
   scrape-and-update:
-    # 実行環境として最新のUbuntuを使用
     runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Tokyo
 
     steps:
       # 1. リポジトリのコードをチェックアウト
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Python環境をセットアップ (pipキャッシュを有効化)
+      # 2. Python環境をセットアップ
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip' # requirements.txt に基づいてpipの依存関係をキャッシュ
+          cache: 'pip' # pipのキャッシュはこれが一番シンプルで十分
 
-      # 3. Pythonの依存ライブラリをインストール (キャッシュがあれば高速化)
+      # 3. 依存ライブラリをインストール
       - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
       
-      # 4. Playwrightのブラウザをキャッシュ
+      # ★★★ ここからがQiita記事のアイデアを取り入れた修正部分 ★★★
+      # https://qiita.com/ohakutsu/items/8e4c10cad360bf4cda04
+
+      # 4. Playwrightのバージョンを取得
+      - name: Get Playwright version
+        id: playwright-version
+        run: |
+          echo "VERSION=$(pip show playwright | grep Version | cut -d ' ' -f 2)" >> $GITHUB_ENV
+      
+      # 5. Playwrightのブラウザをキャッシュ
+      #    キャッシュキーにPlaywrightのバージョンを含める
       - name: Cache Playwright browsers
+        id: cache-playwright # このステップにIDを付けて後で参照する
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('**/requirements.txt') }}
+          key: ${{ runner.os }}-playwright-${{ env.VERSION }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            ${{ runner.os }}-playwright-
+            ${{ runner.os }}-playwright-${{ env.VERSION }}-
 
-      # 5. PlaywrightのブラウザとOS依存関係をインストール (キャッシュがあれば高速化)
-      - name: Install Playwright browsers
+      # 6. Playwrightのブラウザと依存関係をインストール
+      #    【重要】キャッシュがヒットしなかった場合のみ、このステップを実行する
+      - name: Install Playwright browsers and dependencies
+        if: steps.cache-playwright.outputs.cache-hit != 'true'
         run: playwright install --with-deps
 
-      # 6. Pythonスクリプトを実行
-      # GitHub Secretsから認証情報を環境変数としてスクリプトに渡す
+      # ★★★ 修正ここまで ★★★
+
+      # 7. Pythonスクリプトを実行
       - name: Run scraper script
         env:
           TIMETREE_EMAIL: ${{ secrets.TIMETREE_EMAIL }}
@@ -503,3 +656,48 @@ jobs:
           GAS_WEBAPP_URL: ${{ secrets.GAS_WEBAPP_URL }}
         run: python timetree_scraper.py
 
+      # 8. 実行結果をジョブサマリーに計算して出力
+      - name: Calculate and Post Execution Summary
+        # ジョブが成功しても失敗しても、必ずこのステップを実行する
+        if: always()
+        # 公式のgithub-scriptアクションを使用
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // ワークフローの開始時刻と現在時刻（このステップの実行時刻）を取得
+            const startTime = new Date('${{ job.started_at }}');
+            const endTime = new Date();
+            
+            // ミリ秒単位で差を計算
+            const durationMs = endTime - startTime;
+            
+            // 分と秒に変換
+            const minutes = Math.floor(durationMs / 60000);
+            const seconds = ((durationMs % 60000) / 1000).toFixed(0);
+            const durationStr = `${minutes}分 ${seconds}秒`;
+
+            const jstOptions = {
+              timeZone: 'Asia/Tokyo',
+              year: 'numeric', month: '2-digit', day: '2-digit',
+              hour: '2-digit', minute: '2-digit', second: '2-digit',
+              hour12: false // 24時間表記
+            };
+
+            // JSTに変換した文字列を取得
+            //const startTimeJST = startTime.toLocaleString('ja-JP', jstOptions);
+            const endTimeJST = endTime.toLocaleString('ja-JP', jstOptions);
+            
+            // ジョブサマリーを生成
+            await core.summary
+              .addHeading('実行結果サマリー', 2) // h2見出し
+              .addList([
+                `ワークフロー名 : ${{ github.workflow }}`,
+                `実行トリガー   : \`${{ github.event_name }}\``,
+                `ステータス     : ${'${{ job.status }}' === 'success' ? ' 成功 ✅' : ' 失敗 ❌'}`
+              ])
+              .addHeading('実行日時', 3) // h3見出し
+              .addTable([
+                [ {data: '終了 (JST)', header: true} ],
+                [  endTimeJST ]
+              ])
+              .write(); // サマリーに書き込む

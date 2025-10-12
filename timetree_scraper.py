@@ -173,9 +173,15 @@ def main():
                 response = requests.post(GAS_WEBAPP_URL, data=json.dumps(sorted_events), headers=headers)
                 response.raise_for_status()
                 print(f"Successfully sent data. Status: {response.status_code}")
-                print(f"Response from GAS: {response.text}")
+                print(f"Response from GAS:")
+                gas_response = response.json()
+                print(json.dumps(gas_response, indent=2, ensure_ascii=False))
             except requests.exceptions.RequestException as e:
                 print(f"Error sending data to GAS: {e}")
+            except json.JSONDecodeError:
+                # もしJSONでなかった場合は、テキストとしてそのまま表示
+                print("Error Response is not in JSON format. Raw text:")
+                print(response.text)
         else:
             print("\nGAS_WEBAPP_URL is not set. Skipping sending data to GAS.")
 
