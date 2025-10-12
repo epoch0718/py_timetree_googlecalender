@@ -27,33 +27,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Python環境をセットアップ (pipキャッシュを有効化)
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      # 2. 依存関係をインストール（キャッシュ有効化）
+      - name: Setup Python, Dependencies and Playwright
+        uses: microsoft/playwright-python-action@v1
         with:
-          python-version: '3.11'
-          cache: 'pip' # requirements.txt に基づいてpipの依存関係をキャッシュ
+          # requirements.txt を使って依存関係をインストールするように指示
+          install-deps-from: 'requirements.txt'
 
-      # 3. Pythonの依存ライブラリをインストール (キャッシュがあれば高速化)
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      
-      # 4. Playwrightのブラウザをキャッシュ
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
-
-      # 5. PlaywrightのブラウザとOS依存関係をインストール (キャッシュがあれば高速化)
-      - name: Install Playwright browsers
-        run: playwright install --with-deps
-
-      # 6. Pythonスクリプトを実行
+      # 3. Pythonスクリプトを実行
       # GitHub Secretsから認証情報を環境変数としてスクリプトに渡す
       - name: Run scraper script
         env:
