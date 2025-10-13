@@ -84,18 +84,17 @@ def scrape_one_week_events(page):
             memo = None
             try:
                 event_element.click(timeout=1000, force=True)
-                page.wait_for_timeout(300)
-                memo_element = page.locator('ul.css-19zmclu + div p, ul.css-19zmclu + div a')
+                page.wait_for_timeout(500)
+                memo_element = page.locator('p.exlc7u1.vjrcbi0')
                 if memo_element.count() > 0:
                     memo = memo_element.inner_text()
                 
                 close_button = page.get_by_label("閉じる", exact=True)
                 if close_button.count() > 0:
                     close_button.click(timeout=1000)
-                    page.wait_for_timeout(300)
-            except Exception:
-                # メモが取れなくても処理は続行
-                pass
+                    page.wait_for_timeout(500)
+            except Exception as e:
+                print(f"Could not get memo for '{title}': {e}")
 
             events.append({
                 'date': date_str,
@@ -112,12 +111,13 @@ def main():
     all_events = []
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=True,
+            headless=False,
+            args=["--force-device-scale-factor=1.1"],
         )
         context = browser.new_context(
             timezone_id="Asia/Tokyo",
             locale="ja-JP",
-            viewport={'width': 1920, 'height': 1080}
+            #viewport={'width': 1920, 'height': 1080}
         )
         page = context.new_page()
 
@@ -142,6 +142,7 @@ def main():
         page.wait_for_timeout(2000) # 念のため追加待機
         previous_week_events = scrape_one_week_events(page)
         all_events.extend(previous_week_events)
+        print(previous_week_events)
         print(f"Found {len(previous_week_events)} events in the previous week.")
 
         # --- 2. 今週（最初に表示された週）のデータを収集 ---
@@ -151,6 +152,7 @@ def main():
         page.wait_for_timeout(2000)
         current_week_events = scrape_one_week_events(page)
         all_events.extend(current_week_events)
+        print(current_week_events)
         print(f"Found {len(current_week_events)} events in the current week.")
 
         # --- 3. 来週のデータを収集 ---
@@ -160,6 +162,7 @@ def main():
         page.wait_for_timeout(2000)
         next_week_events = scrape_one_week_events(page)
         all_events.extend(next_week_events)
+        print(next_week_events)
         print(f"Found {len(next_week_events)} events in the next week.")
 
         # --- 4. 全データをまとめてGASに送信 ---

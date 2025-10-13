@@ -1,34 +1,47 @@
 // このスクリプトが管理するイベントであることを示すための「目印」
-const SYNC_TAG = '[TimeTree]'; // 見えない文字(ゼロ幅スペース)で囲んだタグ
+const SYNC_TAG = '[TimeTree]'; // 
 
 /**
- * 12時間表記(AM/PM)の時刻文字列をパースして、Dateオブジェクトを生成するヘルパー関数
- * @param {string} dateStr - "YYYY-MM-DD"形式の日付文字列
- * @param {string} timeStr - "H:MM AM/PM"形式の時刻文字列
+ * 時刻文字列をパースしてDateオブジェクトを生成する。
+ * "5:00 PM" (12時間形式) と "17:00" (24時間形式) の両方に対応。
+ * @param {string} dateStr - "YYYY-MM-DD"
+ * @param {string} timeStr - "H:MM AM/PM" または "HH:MM"
  * @returns {Date}
  */
 function parseDateTime(dateStr, timeStr) {
-  // この関数は変更なし
   const dateParts = dateStr.split('-');
   const year = parseInt(dateParts[0], 10);
   const month = parseInt(dateParts[1], 10) - 1;
   const day = parseInt(dateParts[2], 10);
 
-  const timeMatch = timeStr.match(/(\d+):(\d+)\s(AM|PM)/);
-  if (!timeMatch) return null; // 不正な形式の場合はnullを返す
+  // ★★★ ここからが修正部分 ★★★
 
-  let hour = parseInt(timeMatch[1], 10);
-  const minute = parseInt(timeMatch[2], 10);
-  const ampm = timeMatch[3];
-
-  if (ampm === 'PM' && hour < 12) {
-    hour += 12;
-  }
-  if (ampm === 'AM' && hour === 12) {
-    hour = 0;
+  // まず、24時間形式 ("17:00") かどうかを試す
+  let timeMatch = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+  if (timeMatch) {
+    const hour = parseInt(timeMatch[1], 10);
+    const minute = parseInt(timeMatch[2], 10);
+    return new Date(year, month, day, hour, minute);
   }
 
-  return new Date(year, month, day, hour, minute);
+  // 次に、12時間形式 ("5:00 PM") かどうかを試す
+  timeMatch = timeStr.match(/(\d+):(\d+)\s(AM|PM)/);
+  if (timeMatch) {
+    let hour = parseInt(timeMatch[1], 10);
+    const minute = parseInt(timeMatch[2], 10);
+    const ampm = timeMatch[3];
+
+    if (ampm === 'PM' && hour < 12) {
+      hour += 12;
+    }
+    if (ampm === 'AM' && hour === 12) { // 深夜12時
+      hour = 0;
+    }
+    return new Date(year, month, day, hour, minute);
+  }
+  
+  // どちらの形式でもなければnullを返す
+  return null; 
 }
 
 /**
@@ -56,8 +69,7 @@ function doPost(e) {
   
   try {
     const timetreeEvents = JSON.parse(e.postData.contents);
-    //const calendar = CalendarApp.getDefaultCalendar();
-    const calendar = CalendarApp.getCalendarById('epoch.making.glass@gmail.com'); 
+    const calendar = CalendarApp.getDefaultCalendar();
     
     
     logs.push(`Received ${timetreeEvents.length} events to process from TimeTree.`);

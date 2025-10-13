@@ -13,9 +13,9 @@
 // --- 設定項目 ---
 // ★★★ 以下を環境に合わせて変更してください ★★★
 // 【注意】セキュリティのため、APIキーなどはスクリプトプロパティでの管理を推奨します
-const NOTION_API_KEY = 'notionのAPIキーをセットしてください'; // 
+const NOTION_API_KEY = 'notionのAPIキーを記入してください'; // 
 const NOTION_DATABASE_ID = '287c32e7c65781ddb2aec4ebfdad083d'; // 
-const CALENDAR_ID = 'yoshinagataroai@gmail.com'; // 
+const CALENDAR_ID = 'epoch.making.glass@gmail.com'; // 
 const SYNC_RANGE_DAYS_BEFORE = 7; // 同期対象とする日数（今日から何日前までか）
 const SYNC_RANGE_DAYS = 10; // 同期対象とする日数（今日から何日先までか）
 const TRIGGER_EVERY_MINUTES = 10;//setupTrigger で何分単位に実行するか決める
@@ -26,7 +26,9 @@ const NOTION_PROPS = {
   date: '実行日',         // 日付プロパティ (必須)
   gcEventId: 'GC Event ID', // Google CalendarのイベントIDを格納するテキストプロパティ (必須)
   gcLink: 'GC Link',        // Google Calendarへのリンクを格納するURLプロパティ (任意)
-  memo: 'メモ'
+  memo: 'メモ',
+  price: '単価',
+  endDate: '終了日' 
 };
 // ★★★ 設定項目ここまで ★★★
 
@@ -498,7 +500,17 @@ function callNotionApi(endpoint, method = 'get', payload = null, muteHttpExcepti
 function getNotionPageById(pageId) { if (!pageId) return null; try { return callNotionApi(`/pages/${pageId}`, 'get'); } catch (e) { if (e.message.includes('status 404')) return null; Logger.log(`[getNotionPageById]ページ取得エラー(ID:${pageId}):${e}`); return null; } }
 function findNotionPageByGcEventId(gcEventId, onlyActive = false) { if (!gcEventId) return null; const payload = { filter:{property:NOTION_PROPS.gcEventId,rich_text:{equals:gcEventId}}, page_size:1 }; try { const response = callNotionApi(`/databases/${NOTION_DATABASE_ID}/query`, 'post', payload); if (response.results?.length > 0) { const page = response.results[0]; if (onlyActive && page.archived) return null; return page; } else return null; } catch (e) { Logger.log(`[findNotionPageByGcEventId]DB検索エラー(GC ID:${gcEventId}):${e}`); return null; } }
 function createNotionPageFromGcEvent(event) { const eventId=event.id; try { const props = buildNotionPropertiesFromGcEvent(event); const payload = {parent:{database_id:NOTION_DATABASE_ID}, properties:props}; return callNotionApi('/pages', 'post', payload); } catch (e) { Logger.log(`[createNotionPage]Notion作成失敗(GC:${eventId}):${e}`); return null; } }
-function updateNotionPageFromGcEvent(pageId, event) { const eventId=event.id; try { const props = buildNotionPropertiesFromGcEvent(event); if (!props || Object.keys(props).length === 0) return true; const payload = {properties:props}; callNotionApi(`/pages/${pageId}`, 'patch', payload); return true; } catch (e) { Logger.log(`[updateNotionPage]Notion更新失敗(ID:${pageId},GC:${eventId}):${e}`); return false; } }
+function updateNotionPageFromGcEvent(pageId, event) {
+   const eventId=event.id; 
+   try { 
+    const props = buildNotionPropertiesFromGcEvent(event); 
+    if (!props || Object.keys(props).length === 0) return true; 
+    const payload = {properties:props}; callNotionApi(`/pages/${pageId}`, 'patch', payload); return true; 
+   } catch (e) {
+     Logger.log(`[updateNotionPage]Notion更新失敗(ID:${pageId},GC:${eventId}):${e}`); return false; 
+   } 
+}
+
 function deleteNotionPage(pageId) { if (!pageId) return false; try { callNotionApi(`/pages/${pageId}`, 'patch', {archived:true}); return true; } catch (e) { Logger.log(`[deleteNotionPage]Notionアーカイブ失敗(ID:${pageId}):${e}`); return false; } }
 function updateNotionWithGcEventId(pageId, eventId) { if (!pageId || !eventId) return false; try { const payload = {properties:{[NOTION_PROPS.gcEventId]:{rich_text:[{type:"text", text:{content:eventId}}]}}}; callNotionApi(`/pages/${pageId}`, 'patch', payload); return true; } catch (e) { Logger.log(`[updateNotionWithGcEventId]NotionへのGC ID(${eventId})書込失敗(Page:${pageId}):${e}`); return false; } }
 function clearGcEventIdFromNotion(pageId) { if (!pageId) return false; try { const payload = {properties:{[NOTION_PROPS.gcEventId]:{rich_text:[]}}}; callNotionApi(`/pages/${pageId}`, 'patch', payload); return true; } catch (e) { Logger.log(`[clearGcEventIdFromNotion]Notion(${pageId})のGC IDクリア失敗:${e}`); return false; } }
@@ -520,6 +532,30 @@ function buildNotionPropertiesFromGcEvent(event) {
     dateProp.end=null;
   } 
   props[NOTION_PROPS.date]={date:dateProp}; 
+
+
+  // ★★★ ここからが追加部分 ★★★
+  // --- 2. 終了日（endDate）プロパティの処理 ---
+  // "endDate"プロパティが設定されていれば、startDateから年月日を抽出して設定
+  if (NOTION_PROPS.endDate && startDate) {
+    // startDate（Dateオブジェクト）を "YYYY-MM-DD" 形式の文字列に変換
+    // タイムゾーンはスクリプトの実行環境に依存するが、通常はこれで問題ない
+    const year = startDate.getFullYear();
+    const month = (startDate.getMonth() + 1).toString().padStart(2, '0');
+    const day = startDate.getDate().toString().padStart(2, '0');
+    const yyyymmdd = `${year}-${month}-${day}`;
+    
+    // Notionの日付プロパティの形式で設定
+    props[NOTION_PROPS.endDate] = {
+      date: {
+        start: yyyymmdd
+        // 終了日プロパティに期間は不要なため、endは設定しない
+      }
+    };
+  }
+  // ★★★ 追加ここまで ★★★
+
+
   props[NOTION_PROPS.gcEventId]={rich_text:[{type:"text",text:{content:eventId}}]}; 
   if(NOTION_PROPS.gcLink&&event.htmlLink){
     props[NOTION_PROPS.gcLink]={url:event.htmlLink};
@@ -527,10 +563,10 @@ function buildNotionPropertiesFromGcEvent(event) {
     props[NOTION_PROPS.gcLink]={url:null};
   } 
 
- // ★★★ ここからが追加部分 ★★★
+  const description = event.description || '';
+  // ★★★ ここからが追加部分 ★★★
   // "memo"プロパティが設定されていれば、GCのdescriptionをそこに設定
   if (NOTION_PROPS.memo) {
-    const description = event.description || '';
     // Notionのテキストプロパティは2000文字の制限があるため、超える場合は切り詰める
     props[NOTION_PROPS.memo] = {
       rich_text: [{
@@ -540,6 +576,31 @@ function buildNotionPropertiesFromGcEvent(event) {
     };
   }
   // ★★★ 追加ここまで ★★★
+
+  // "price"プロパティが設定されていれば、descriptionから金額を解析
+  if (NOTION_PROPS.price) {
+    // 正規表現で "[金額]10000" や "[価格] 12000" のようなパターンを探す
+    // 数字の前の空白はあってもなくてもOK (\s*)
+    // 数字はカンマ区切りでもOK ([\d,]+)
+    const priceMatch = description.match(/\[(?:金額|価格)\]\s*([\d,]+)/);
+    
+    if (priceMatch && priceMatch[1]) {
+      // マッチした場合、カンマを除去して数値に変換
+      const priceValue = parseInt(priceMatch[1].replace(/,/g, ''), 10);
+      
+      // Notionの数値プロパティの形式で設定
+      if (!isNaN(priceValue)) {
+        props[NOTION_PROPS.price] = {
+          number: priceValue
+        };
+      }
+    } else {
+      // マッチしなかった場合、またはすでに値が入っている場合はどうするか？
+      // ここでは、マッチしなかった場合は何もしない（nullをセットしない）仕様とします。
+      // nullをセットすると、既存の値がクリアされてしまうため。
+    }
+  }
+
   return props;
 }
 
