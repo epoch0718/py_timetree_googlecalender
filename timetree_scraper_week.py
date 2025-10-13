@@ -46,7 +46,7 @@ def parse_weekly_time(date_str, time_str):
     # どのパターンにもマッチしなかった場合
     print(f"Could not find a valid time pattern in '{time_str}'")
     return None, date_str
-    
+
 def get_events_by_bounding_box_weekly(page):
     """
     ウィークリービュー専用のスクレイピング関数（HTML構造ベース版）。
@@ -136,7 +136,7 @@ def get_events_by_bounding_box_weekly(page):
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=False, # 開発中はFalse推奨
+            headless=True, # 開発中はFalse推奨
             args=["--force-device-scale-factor=1.1"]
         )
         context = browser.new_context(
