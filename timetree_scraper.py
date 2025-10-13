@@ -130,7 +130,7 @@ def get_events_by_bounding_box(page):
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=True,
+            headless=False,
             args=["--force-device-scale-factor=1.1"]
             )
         

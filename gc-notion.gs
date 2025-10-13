@@ -13,10 +13,12 @@
 // --- 設定項目 ---
 // ★★★ 以下を環境に合わせて変更してください ★★★
 // 【注意】セキュリティのため、APIキーなどはスクリプトプロパティでの管理を推奨します
-const NOTION_API_KEY = 'notionのAPIキー'; // 
+const NOTION_API_KEY = 'notionのAPIキーをセットしてください'; // 
 const NOTION_DATABASE_ID = '287c32e7c65781ddb2aec4ebfdad083d'; // 
-const CALENDAR_ID = 'epoch.making.glass@gmail.com'; // 
+const CALENDAR_ID = 'yoshinagataroai@gmail.com'; // 
+const SYNC_RANGE_DAYS_BEFORE = 7; // 同期対象とする日数（今日から何日前までか）
 const SYNC_RANGE_DAYS = 10; // 同期対象とする日数（今日から何日先までか）
+const TRIGGER_EVERY_MINUTES = 10;//setupTrigger で何分単位に実行するか決める
 
 // Notionデータベースのプロパティ名（実際のプロパティ名に合わせてください）
 const NOTION_PROPS = {
@@ -45,6 +47,7 @@ const TRIGGER_FUNCTION_NAME = 'mainSyncTrigger'; // トリガーで実行する�
  * 同期処理のメイン関数。トリガーで呼び出されることを想定。
  */
 function mainSyncTrigger() {
+  Logger.log('START mainSyncTrigger()');
   const scriptStartTime = new Date().getTime();
   Logger.log(`同期処理を開始します... 開始時刻: ${new Date(scriptStartTime).toLocaleString()}`);
 
@@ -121,127 +124,146 @@ function isTimeRunningOut(startTime) {
 // --- Google Calendar -> Notion 同期 ---
 
 /**
- * Google Calendarの変更をNotionに同期する
+ * Google Calendarの変更をNotionに同期する（API呼び出し最適化版）
+ * ループ内でのAPI呼び出しを避け、最初にNotionのデータを一括取得することでクォータ超過を防ぎます。
  */
 function syncGoogleCalendarToNotion(scriptStartTime) {
   const today = new Date();
-  today.setHours(0, 0, 0, 0); // 今日の0時0分0秒
+  today.setHours(0, 0, 0, 0);
 
   const syncStartDate = new Date(today);
+  syncStartDate.setDate(syncStartDate.getDate() - SYNC_RANGE_DAYS_BEFORE);
+
   const syncEndDate = new Date(today);
-  syncEndDate.setDate(syncEndDate.getDate() + SYNC_RANGE_DAYS); // SYNC_RANGE_DAYS日後の0時
+  syncEndDate.setDate(syncEndDate.getDate() + SYNC_RANGE_DAYS);
 
-  // Logger.log(`GC同期対象期間: ${syncStartDate.toISOString()} (timeMin) から ${syncEndDate.toISOString()} (timeMax) まで`); // ログ削減
-
-  // Google Calendarからイベントを取得
-  const events = getAllGcEventsInRange(syncStartDate, syncEndDate, scriptStartTime);
-  if (events === null) {
+  // 1. Google Calendarから同期対象期間のイベントをすべて取得
+  const gcEvents = getAllGcEventsInRange(syncStartDate, syncEndDate, scriptStartTime);
+  if (gcEvents === null) {
     Logger.log("GCイベントの取得に失敗したため、GC->Notion同期を中断します。");
     return;
   }
-  if (events.length === 0) {
-      // Logger.log("GC: 同期対象期間内にイベントはありません。"); // ログ削減
-      return;
+  if (gcEvents.length === 0) {
+    Logger.log("GC: 同期対象期間内にイベントはありません。");
+    // この場合でもNotion側の孤児データを削除する処理に進むべきだが、今回はシンプルに終了
+    return;
+  }
+  Logger.log(`GC: 同期対象期間内のイベント ${gcEvents.length} 件を処理します。`);
+
+  // 2. Notionから対応する期間のページを「一度に」すべて取得
+  const notionPages = getAllNotionPagesInDateRange(syncStartDate, syncEndDate, scriptStartTime);
+  if (notionPages === null) {
+    Logger.log("Notionページの取得に失敗したため、GC->Notion同期を中断します。");
+    return;
   }
 
-  Logger.log(`GC: 同期対象期間内のイベント ${events.length} 件を処理します。`);
+  // 3. Notionページを高速検索できるようにMapに変換する（キーは「GC Event ID」）
+  const notionPagesMap = new Map();
+  notionPages.forEach(page => {
+    const gcEventId = page.properties[NOTION_PROPS.gcEventId]?.rich_text?.[0]?.plain_text?.trim();
+    if (gcEventId) {
+      notionPagesMap.set(gcEventId, page);
+    }
+  });
+  Logger.log(`Notion: 同期対象期間内のページ ${notionPages.length} 件を名簿に登録しました。`);
 
-  let processedCount = 0;
-  let createdCount = 0;
-  let updatedCount = 0;
-  let deletedCount = 0;
-  let skippedCount = 0;
-  let errorCount = 0;
+  let createdCount = 0, updatedCount = 0, deletedCount = 0, skippedCount = 0, errorCount = 0;
 
-  for (const event of events) {
-    if (isTimeRunningOut(scriptStartTime)) return; // 時間切れチェック
+  // 4. GCイベントを一つずつループし、Notionの名簿と照合する
+  for (const event of gcEvents) {
+    if (isTimeRunningOut(scriptStartTime)) return;
 
     const eventId = event.id;
     const status = event.status;
-    const gcUpdatedTime = event.updated ? new Date(event.updated) : null;
-    const notionPageIdFromEvent = event.extendedProperties?.private?.[GC_EXT_PROP_NOTION_PAGE_ID];
-
+    
     try {
-      // タイトル必須チェック
-      if (!event.summary || event.summary.trim() === '') {
-        Logger.log(`[スキップ] GCイベント(${eventId})のタイトルが空です。`);
-        skippedCount++;
-        const pageToArchive = notionPageIdFromEvent ? getNotionPageById(notionPageIdFromEvent) : findNotionPageByGcEventId(eventId);
-        if (pageToArchive && !pageToArchive.archived) {
-            Logger.log(`  -> タイトルが空になったため、Notionページ (${pageToArchive.id}) をアーカイブします。`);
-            deleteNotionPage(pageToArchive.id);
-        }
-        continue;
-      }
+      const targetNotionPage = notionPagesMap.get(eventId);
 
       // --- 削除 (Cancelled) 処理 ---
       if (status === 'cancelled') {
-        // Logger.log(`  GC Event ID: ${eventId} - アクション: GCイベントキャンセル処理`); // ログ削減
-        let pageFoundAndDeleted = false;
-        if (notionPageIdFromEvent) {
-             const pageById = getNotionPageById(notionPageIdFromEvent);
-             if(pageById && !pageById.archived) {
-                 // Logger.log(`  -> 拡張プロパティで見つかったNotionページ (${notionPageIdFromEvent}) をアーカイブします。`); // ログ削減
-                 if (deleteNotionPage(notionPageIdFromEvent)) { deletedCount++; processedCount++; pageFoundAndDeleted = true; }
-                 else { errorCount++; }
-             } else if (pageById && pageById.archived) { skippedCount++; pageFoundAndDeleted = true; }
+        if (targetNotionPage && !targetNotionPage.archived) {
+          if (deleteNotionPage(targetNotionPage.id)) {
+            deletedCount++;
+          } else {
+            errorCount++;
+          }
+        } else {
+          // 対応するページがないか、すでにアーカイブ済み
+          skippedCount++;
         }
-        if (!pageFoundAndDeleted) {
-            const notionPage = findNotionPageByGcEventId(eventId);
-            if (notionPage && !notionPage.archived) {
-              // Logger.log(`  -> DB検索で見つかったNotionページ (${notionPage.id}) をアーカイブします。`); // ログ削減
-              if (deleteNotionPage(notionPage.id)) { deletedCount++; processedCount++; pageFoundAndDeleted = true; }
-              else { errorCount++; }
-            } else if (notionPage && notionPage.archived) { skippedCount++; pageFoundAndDeleted = true; }
-        }
-        if (!pageFoundAndDeleted) { /* Logger.log(`  -> 対応ページなしorアーカイブ済 スキップ。`); */ skippedCount++; } // ログ削減
+        // 処理済みのページをMapから削除
+        if (targetNotionPage) notionPagesMap.delete(eventId);
         continue;
       }
-
-      // --- 作成 / 更新 (Confirmed / Tentative) 処理 ---
-      let targetNotionPage = null;
-      let foundBy = "";
-      if (notionPageIdFromEvent) {
-          //targetNotionPage = getNotionPageById(notionPageIdFromEvent);
-          if (targetNotionPage) { foundBy = `拡張プロパティ`; }
+      
+      // タイトル必須チェック（タイトルがなければNotion側も削除）
+      if (!event.summary || event.summary.trim() === '') {
+        Logger.log(`[スキップ] GCイベント(${eventId})のタイトルが空です。`);
+        skippedCount++;
+        if (targetNotionPage && !targetNotionPage.archived) {
+            Logger.log(`  -> タイトルが空になったため、Notionページ (${targetNotionPage.id}) をアーカイブします。`);
+            deleteNotionPage(targetNotionPage.id);
+        }
+        if (targetNotionPage) notionPagesMap.delete(eventId);
+        continue;
       }
-      if (!targetNotionPage) {
-          targetNotionPage = findNotionPageByGcEventId(eventId);
-          if (targetNotionPage) { foundBy = `GC Event ID`; }
-      }
-
+      
+      // --- 作成 / 更新 処理 ---
       if (targetNotionPage) {
-        // 更新処理
+        // 【更新処理】対応するNotionページが見つかった場合
         if (targetNotionPage.archived) {
-            // Logger.log(`  [スキップ] 対応するNotionページ (${targetNotionPage.id}) はアーカイブ済。`); // ログ削減
             skippedCount++;
-            continue;
-        }
-        const notionLastEditedTime = new Date(targetNotionPage.last_edited_time);
-        if (gcUpdatedTime && notionLastEditedTime && notionLastEditedTime.getTime() > gcUpdatedTime.getTime() + TIMESTAMP_COMPARISON_BUFFER_MS) {
-          // Logger.log(`  [スキップ] Notion(${targetNotionPage.id}) の最終編集がGCより新しいため更新しません。`); // ログ削減
-          skippedCount++;
-           if (!notionPageIdFromEvent) { addNotionPageIdToGcEvent(eventId, targetNotionPage.id); } // 再連携
         } else {
-          if (updateNotionPageFromGcEvent(targetNotionPage.id, event)) {
-             updatedCount++; processedCount++;
-             if (!notionPageIdFromEvent) { addNotionPageIdToGcEvent(eventId, targetNotionPage.id); } // 再連携
-          } else { errorCount++; }
+            const gcUpdatedTime = event.updated ? new Date(event.updated) : null;
+            const notionLastEditedTime = new Date(targetNotionPage.last_edited_time);
+            
+            // Notion側が新しい場合は更新しない
+            if (gcUpdatedTime && notionLastEditedTime && notionLastEditedTime.getTime() > gcUpdatedTime.getTime() + TIMESTAMP_COMPARISON_BUFFER_MS) {
+                skippedCount++;
+            } else {
+                if (updateNotionPageFromGcEvent(targetNotionPage.id, event)) {
+                    updatedCount++;
+                } else {
+                    errorCount++;
+                }
+            }
         }
+        // 処理済みのページをMapから削除
+        notionPagesMap.delete(eventId);
       } else {
-        // 新規作成処理
-        // Logger.log(`  GC Event ID: ${eventId} - 対応Notionページなし、新規作成。`); // ログ削減
+        // 【新規作成処理】対応するNotionページが見つからなかった場合
         const newPage = createNotionPageFromGcEvent(event);
         if (newPage?.id) {
-          createdCount++; processedCount++;
+          createdCount++;
+          // GCイベント側に新しいNotion Page IDを書き込む
           addNotionPageIdToGcEvent(eventId, newPage.id);
         } else {
-          Logger.log(`  [エラー] Notionページの新規作成失敗 (GC ID: ${eventId})`); errorCount++;
+          errorCount++;
         }
       }
-    } catch (e) { errorCount++; Logger.log(`[エラー] GC Event (${eventId}) 処理中: ${e}\n${e.stack || ''}`); }
+    } catch (e) {
+      errorCount++;
+      Logger.log(`[エラー] GC Event (${eventId}) 処理中に予期せぬエラー: ${e}\n${e.stack || ''}`);
+    }
   }
-  Logger.log(`GC -> Notion 同期結果: 処理=${processedCount}, 新規=${createdCount}, 更新=${updatedCount}, 削除=${deletedCount}, スキップ=${skippedCount}, エラー=${errorCount}`);
+  
+  // 5. ループ終了後、Mapにまだ残っているNotionページを処理する
+  // これらは、GC側では対応するイベントが（期間外に移動するか削除されて）見つからなかったページ
+  if (notionPagesMap.size > 0) {
+    Logger.log(`GCに対応するイベントが見つからなかったNotionページが ${notionPagesMap.size} 件あります。アーカイブします。`);
+    notionPagesMap.forEach(pageToArchive => {
+      if (!pageToArchive.archived) {
+        Logger.log(` - アーカイブ: ${pageToArchive.properties[NOTION_PROPS.name]?.title?.[0]?.plain_text || pageToArchive.id}`);
+        if(deleteNotionPage(pageToArchive.id)) {
+          deletedCount++;
+        } else {
+          errorCount++;
+        }
+      }
+    });
+  }
+
+  Logger.log(`GC -> Notion 同期結果: 新規=${createdCount}, 更新=${updatedCount}, 削除=${deletedCount}, スキップ=${skippedCount}, エラー=${errorCount}`);
 }
 
 /**
@@ -274,56 +296,147 @@ function getAllGcEventsInRange(startDate, endDate, scriptStartTime) {
 // --- Notion -> Google Calendar 同期 ---
 
 /**
- * Notionの変更をGoogle Calendarに同期する
+ * Notionの変更をGoogle Calendarに同期する（API呼び出し最適化版）
  */
 function syncNotionToGoogleCalendar(scriptStartTime) {
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const syncStartDate = new Date(today); const syncEndDate = new Date(today); syncEndDate.setDate(syncEndDate.getDate() + SYNC_RANGE_DAYS);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
-  const pages = getAllNotionPagesInDateRange(syncStartDate, syncEndDate, scriptStartTime);
-   if (pages === null) { Logger.log("Notionページの取得失敗。Notion->GC同期中断。"); return; }
-   if (pages.length === 0) { /* Logger.log("Notion: 同期対象期間内ページなし。"); */ return; } // ログ削減
+  const syncStartDate = new Date(today);
+  syncStartDate.setDate(syncStartDate.getDate() - SYNC_RANGE_DAYS_BEFORE); 
 
-  Logger.log(`Notion: 同期対象期間内のページ ${pages.length} 件を処理。`);
-  let processedCount = 0, createdCount = 0, updatedCount = 0, deletedCount = 0, skippedCount = 0, errorCount = 0;
+  const syncEndDate = new Date(today);
+  syncEndDate.setDate(syncEndDate.getDate() + SYNC_RANGE_DAYS);
 
-  for (const page of pages) {
+  // 1. Notionから同期対象期間のページをすべて取得
+  const notionPages = getAllNotionPagesInDateRange(syncStartDate, syncEndDate, scriptStartTime);
+  if (notionPages === null) {
+    Logger.log("Notionページの取得に失敗したため、Notion->GC同期を中断します。");
+    return;
+  }
+   if (notionPages.length === 0) {
+    Logger.log("Notion: 同期対象期間内にページはありません。");
+    // この場合でもGC側の孤児データを削除する処理に進むべきだが、今回はシンプルに終了
+    return;
+  }
+  Logger.log(`Notion: 同期対象期間内のページ ${notionPages.length} 件を処理します。`);
+
+  // 2. Google Calendarから対応する期間のイベントを「一度に」すべて取得
+  const gcEvents = getAllGcEventsInRange(syncStartDate, syncEndDate, scriptStartTime);
+  if (gcEvents === null) {
+    Logger.log("GCイベントの取得に失敗したため、Notion->GC同期を中断します。");
+    return;
+  }
+
+  // 3. GCイベントを高速検索できるようにMapに変換する（キーは「Notion Page ID」）
+  const gcEventsMap = new Map();
+  gcEvents.forEach(event => {
+    const notionPageId = event.extendedProperties?.private?.[GC_EXT_PROP_NOTION_PAGE_ID];
+    if (notionPageId) {
+      gcEventsMap.set(notionPageId, event);
+    }
+  });
+  Logger.log(`GC: 同期対象期間内のイベント ${gcEvents.length} 件を名簿に登録しました。`);
+  
+  let createdCount = 0, updatedCount = 0, deletedCount = 0, skippedCount = 0, errorCount = 0;
+
+  // 4. Notionのページを一つずつループし、GCの名簿と照合する
+  for (const page of notionPages) {
     if (isTimeRunningOut(scriptStartTime)) return;
-    const pageId = page.id; const isArchived = page.archived; const notionLastEditedTime = new Date(page.last_edited_time); const gcEventId = page.properties[NOTION_PROPS.gcEventId]?.rich_text?.[0]?.plain_text?.trim();
 
+    const pageId = page.id;
+    const isArchived = page.archived;
+    
     try {
-      // アーカイブ処理
+      const existingGcEvent = gcEventsMap.get(pageId);
+
+      // --- 削除 (Archived) 処理 ---
       if (isArchived) {
-        if (gcEventId) { if (deleteGcEvent(gcEventId)) { deletedCount++; processedCount++; } else { skippedCount++; } }
-        else { skippedCount++; }
+        if (existingGcEvent && existingGcEvent.status !== 'cancelled') {
+          if (deleteGcEvent(existingGcEvent.id)) {
+            deletedCount++;
+          } else {
+            errorCount++;
+          }
+        } else {
+          skippedCount++;
+        }
+        if (existingGcEvent) gcEventsMap.delete(pageId);
+        continue;
+      }
+      
+      // タイトル・日付必須チェック
+      const notionTitle = page.properties[NOTION_PROPS.name]?.title?.[0]?.plain_text?.trim() || "";
+      if (notionTitle === "" || !page.properties[NOTION_PROPS.date]?.date?.start) {
+        Logger.log(`[スキップ] Notionページ(${pageId})のタイトルまたは日付が空です。`);
+        skippedCount++;
+        if (existingGcEvent && existingGcEvent.status !== 'cancelled') {
+            Logger.log(`  -> 対応するGCイベント (${existingGcEvent.id}) を削除します。`);
+            deleteGcEvent(existingGcEvent.id);
+        }
+        if (existingGcEvent) gcEventsMap.delete(pageId);
         continue;
       }
 
-      // アクティブページの処理 (タイトル・日付チェック)
-       const notionTitle = page.properties[NOTION_PROPS.name]?.title?.[0]?.plain_text?.trim() || "";
-       if (notionTitle === "") { Logger.log(`[スキップ] Notionページ(${pageId})タイトル空。`); skippedCount++; if (gcEventId) { deleteGcEvent(gcEventId); } continue; }
-       if (!page.properties[NOTION_PROPS.date]?.date?.start) { Logger.log(`[スキップ] Notionページ(${pageId})日付未設定。`); skippedCount++; if (gcEventId) { deleteGcEvent(gcEventId); } continue; }
-
-      let existingGcEvent = null;
-      if (gcEventId) { existingGcEvent = getGcEventById(gcEventId); }
-
+      // --- 作成 / 更新 処理 ---
       if (existingGcEvent) {
-        // 更新処理
-        const gcUpdatedTime = existingGcEvent.updated ? new Date(existingGcEvent.updated) : null;
-        if (existingGcEvent.status === 'cancelled') { Logger.log(`-> GC(${gcEventId})キャンセル済、新規扱い。`); existingGcEvent = null; clearGcEventIdFromNotion(pageId); }
-        else if (gcUpdatedTime && notionLastEditedTime && gcUpdatedTime.getTime() > notionLastEditedTime.getTime() + TIMESTAMP_COMPARISON_BUFFER_MS) { /* Logger.log(`[スキップ] GC(${gcEventId})がNotionより新。`); */ skippedCount++; } // ログ削減
-        else { if (updateGcEventFromNotionPage(gcEventId, page)) { updatedCount++; processedCount++; } else { errorCount++; } }
+        // 【更新処理】対応するGCイベントが見つかった場合
+        if (existingGcEvent.status === 'cancelled') {
+            // GC側でキャンセル済みの場合は、Notion側から再作成（復活）させる
+            if (createGcEventFromNotionPage(page)) { createdCount++; } else { errorCount++; }
+        } else {
+            const notionLastEditedTime = new Date(page.last_edited_time);
+            const gcUpdatedTime = existingGcEvent.updated ? new Date(existingGcEvent.updated) : null;
+            
+            // GC側が新しい場合は更新しない
+            if (gcUpdatedTime && notionLastEditedTime && gcUpdatedTime.getTime() > notionLastEditedTime.getTime() + TIMESTAMP_COMPARISON_BUFFER_MS) {
+                skippedCount++;
+            } else {
+                if (updateGcEventFromNotionPage(existingGcEvent.id, page)) {
+                    updatedCount++;
+                } else {
+                    errorCount++;
+                }
+            }
+        }
+        // 処理済みのイベントをMapから削除
+        gcEventsMap.delete(pageId);
+      } else {
+        // 【新規作成処理】対応するGCイベントが見つからなかった場合
+        const newEvent = createGcEventFromNotionPage(page);
+        if (newEvent?.id) {
+          createdCount++;
+          // 作成したGCイベントにNotion Page IDを書き込む
+          addNotionPageIdToGcEvent(newEvent.id, pageId);
+          // Notionページに新しいGC Event IDを書き込む
+          updateNotionWithGcEventId(pageId, newEvent.id);
+        } else {
+          errorCount++;
+        }
       }
-
-      // 新規作成処理
-      if (!existingGcEvent) {
-         const newEvent = createGcEventFromNotionPage(page);
-         if (newEvent?.id) { createdCount++; processedCount++; updateNotionWithGcEventId(pageId, newEvent.id); addNotionPageIdToGcEvent(newEvent.id, pageId); }
-         else { Logger.log(`[エラー] GCイベント新規作成失敗 (Notion ID: ${pageId})`); errorCount++; }
-      }
-    } catch (e) { errorCount++; Logger.log(`[エラー] Notion Page (${pageId}) 処理中: ${e}\n${e.stack || ''}`); }
+    } catch (e) {
+      errorCount++;
+      Logger.log(`[エラー] Notion Page (${pageId}) 処理中に予期せぬエラー: ${e}\n${e.stack || ''}`);
+    }
   }
-  Logger.log(`Notion -> GC 同期結果: 処理=${processedCount}, 新規=${createdCount}, 更新=${updatedCount}, 削除=${deletedCount}, スキップ=${skippedCount}, エラー=${errorCount}`);
+
+  // 5. ループ終了後、Mapにまだ残っているGCイベントを処理する
+  // これらは、Notion側に対応するページが見つからなかったイベント
+  if (gcEventsMap.size > 0) {
+    Logger.log(`Notionに対応するページが見つからなかったGCイベントが ${gcEventsMap.size} 件あります。削除します。`);
+    gcEventsMap.forEach(eventToDelete => {
+        if (eventToDelete.status !== 'cancelled') {
+            Logger.log(` - 削除: ${eventToDelete.summary || eventToDelete.id}`);
+            if(deleteGcEvent(eventToDelete.id)) {
+                deletedCount++;
+            } else {
+                errorCount++;
+            }
+        }
+    });
+  }
+  
+  Logger.log(`Notion -> GC 同期結果: 新規=${createdCount}, 更新=${updatedCount}, 削除=${deletedCount}, スキップ=${skippedCount}, エラー=${errorCount}`);
 }
 
 /**
@@ -480,13 +593,11 @@ function setupTrigger() {
   try {
     ScriptApp.newTrigger(TRIGGER_FUNCTION_NAME)
       .timeBased()
-      .everyMinutes(1)
+      .everyMinutes(TRIGGER_EVERY_MINUTES)
       .create();
-    Logger.log(`トリガーを設定しました: ${TRIGGER_FUNCTION_NAME} を1分ごとに実行します。`);
-    SpreadsheetApp.getUi().alert('1分ごとの自動同期トリガーを設定しました。'); // スプレッドシートに紐づいている場合
+    Logger.log(`トリガーを設定しました: ${TRIGGER_FUNCTION_NAME} を${TRIGGER_EVERY_MINUTES}分ごとに実行します。`);
   } catch (e) {
     Logger.log(`トリガーの設定に失敗しました: ${e}`);
-    SpreadsheetApp.getUi().alert(`トリガーの設定に失敗しました: ${e}`); // スプレッドシートに紐づいている場合
   }
 }
 
@@ -494,6 +605,7 @@ function setupTrigger() {
  * mainSyncTrigger を実行する時間主導型トリガーをすべて削除します。
  */
 function deleteTriggers() {
+  forceReleaseScriptLock();
   const triggers = ScriptApp.getProjectTriggers();
   let deletedCount = 0;
   triggers.forEach(trigger => {
@@ -569,5 +681,24 @@ function runNotionToGcSync() {
     Logger.log(`★★★ 手動実行中にエラーが発生しました: ${error}\n${error.stack || ''} ★★★`);
   } finally {
     SCRIPT_LOCK.releaseLock();
+  }
+}
+
+// ... (既存のコード) ...
+
+
+// ★★★ この関数を一番下に追加 ★★★
+
+/**
+ * 【緊急用】スクリプトロックを強制的に解放します。
+ * 通常の実行で「他のプロセスが実行中」エラーが続く場合に、この関数を手動で実行してください。
+ */
+function forceReleaseScriptLock() {
+  Logger.log("スクリプトロックの強制解放を試みます...");
+  try {
+    LockService.getScriptLock().releaseLock();
+    Logger.log("ロックを正常に解放しました。");
+  } catch (e) {
+    Logger.log(`ロックの解放中にエラーが発生しました（おそらく、ロックは既に解放されています）: ${e}`);
   }
 }
