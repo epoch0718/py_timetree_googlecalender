@@ -16,34 +16,16 @@ GAS_WEBAPP_URL = os.getenv("GAS_WEBAPP_URL")
 
 def parse_weekly_time(date_str, time_str):
     """
-    ウィークリービューの多様な時間形式をパースし、"H:MM AM/PM"形式に変換する。
-    例: "7:00 - 8:00" -> "7:00 AM"
-    例: "10/14 23:00 - 10/15 0:00" -> "11:00 PM"
+    ウィークリービューの時間形式をパースし、"HH:MM" (24時間形式)の文字列を返す。
     """
     if not time_str:
         return None, date_str
     
-    # 正規表現パターンを強化：先頭の時刻 (HH:MM) を確実に抽出
-    # "10/14 23:00" や "7:00" など、どちらの形式でもマッチさせる
+    # "7:00" や "10/14 23:00" などから HH:MM 形式を抽出
     match = re.search(r'(\d{1,2}:\d{2})', time_str)
-    
     if match:
-        time_24h = match.group(1) # "23:00" や "7:00" を取得
-        try:
-            # 24時間形式の文字列からdatetimeオブジェクトを生成
-            dt_obj = datetime.strptime(time_24h, "%H:%M")
+        return match.group(1), date_str # "7:00" や "23:00" をそのまま返す
             
-            # datetimeオブジェクトを "H:MM AM/PM" 形式の文字列にフォーマット
-            # %-I は先頭に0がつかない12時間表記 (macOS/Linux)
-            # Windowsの場合は #I を使う必要があるかもしれないが、GitHub Actions (Linux) では %-I でOK
-            time_12h = dt_obj.strftime("%#I:%M %p" if os.name == 'nt' else "%-I:%M %p").replace(" 0", " ")
-            
-            return time_12h, date_str
-        except Exception as e:
-            print(f"Time parsing error for '{time_str}': {e}")
-            return None, date_str
-            
-    # どのパターンにもマッチしなかった場合
     print(f"Could not find a valid time pattern in '{time_str}'")
     return None, date_str
 
@@ -112,7 +94,7 @@ def get_events_by_bounding_box_weekly(page):
             # メモを取得
             memo = None
             try:
-                event_element.click(timeout=1000)
+                event_element.click(timeout=1000, force=True)
                 page.wait_for_timeout(500)
                 memo_element = page.locator('ul.css-19zmclu + div p, ul.css-19zmclu + div a')
                 if memo_element.count() > 0:
@@ -163,7 +145,7 @@ def main():
         print("Waiting for weekly calendar to load...")
         # 待機セレクタをウィークリービュー用に変更
         page.wait_for_selector('[data-test-id="weekly-calendar-root"]')
-        page.wait_for_timeout(5000)
+        page.wait_for_timeout(1000)
         print("Calendar loaded.")
 
         # ウィークリービュー用の新しい関数を呼び出す
