@@ -65,7 +65,7 @@ jobs:
           TIMETREE_PASSWORD: ${{ secrets.TIMETREE_PASSWORD }}
           TIMETREE_CALENDAR_URL: ${{ secrets.TIMETREE_CALENDAR_URL }}
           GAS_WEBAPP_URL: ${{ secrets.GAS_WEBAPP_URL }}
-        run: python timetree_scraper.py
+        run: python timetree_scraper_week.py
 
       # 8. 実行結果をジョブサマリーに計算して出力
       - name: Calculate and Post Execution Summary
