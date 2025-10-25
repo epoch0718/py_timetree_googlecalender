@@ -111,7 +111,7 @@ def main():
     all_events = []
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=True,
+            headless=False,
             args=["--force-device-scale-factor=1.1"],
         )
         context = browser.new_context(

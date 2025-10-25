@@ -1,8 +1,3 @@
-はい、承知いたしました。
-`GAS`から`GitHub Actions`を起動する際に必要な`GITHUB_PAT`の登録手順も含めて、初心者の方にもさらに分かりやすくなるように全体を再構成し、README.mdを再出力します。
-
----
-
 # TimeTree to Google Calendar Sync Tool 🤖
 
 ## 1. このツールで何ができるの？ 🤔
